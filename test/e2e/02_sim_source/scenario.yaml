@@ -1,0 +1,52 @@
+# Copyright (c) 2026 JAAB Tech SAS, Uruguay
+# SPDX-License-Identifier: BSL-1.1
+
+meta:
+  name: e2e_sim_source
+  version: "1.0.0"
+  description: "sim_source generates traffic from the spec, fields-only, and an encoder packs it into wire bytes"
+
+racks:
+  - name: rack-sim-source
+
+gears:
+  - name: traffic
+    type: sim_source
+    deploy: rack-sim-source
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      seed: 20260904
+      trigger: on_load
+      rate:
+        shape: constant
+        tps: 20
+        duration: 60s
+      mix:
+        - { use: "0100", weight: 100 }
+      set:
+        pan: "4111111111111111"
+        terminal_id: "TERM0001"
+
+  - name: encoder
+    type: codec_iso8583
+    deploy: rack-sim-source
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+  - name: sink
+    type: io_tcp
+    deploy: rack-sim-source
+    config:
+      mode: server
+      bind: ":18590"
+      framing: "length_prefix2"
+      delimiter_append: false
+
+wires:
+  - from: traffic.out
+    to: encoder.in
+
+  - from: encoder.out
+    to: sink.in

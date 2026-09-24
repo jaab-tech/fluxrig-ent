@@ -1,0 +1,61 @@
+# Copyright (c) 2026 JAAB Tech SAS, Uruguay
+# SPDX-License-Identifier: BSL-1.1
+
+meta:
+  name: e2e_sim_responder
+  version: "1.0.0"
+  description: "sim_responder answers as an authorizer behind an io and a codec gear"
+
+# The Mixer pushes a scenario only to the Racks it names.
+racks:
+  - name: rack-sim-responder
+
+gears:
+  # io_iso8583 owns the socket. Replies return on the connection they came from.
+  - name: iso_srv
+    type: io_iso8583
+    deploy: rack-sim-responder
+    config:
+      mode: server
+      bind: ":18591"
+
+  - name: decoder
+    type: codec_iso8583
+    deploy: rack-sim-responder
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: decode
+      validation: off
+
+  - name: issuer
+    type: sim_responder
+    deploy: rack-sim-responder
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      trigger: on_load
+      delay: 10ms
+      default:
+        39: "00"
+        38: "$AUTH"
+        37: "$RRN"
+
+  - name: encoder
+    type: codec_iso8583
+    deploy: rack-sim-responder
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+wires:
+  - from: iso_srv.out
+    to: decoder.in
+
+  - from: decoder.out
+    to: issuer.in
+
+  - from: issuer.out
+    to: encoder.in
+
+  - from: encoder.out
+    to: iso_srv.in

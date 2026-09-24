@@ -1,0 +1,36 @@
+# Copyright (c) 2026 JAAB Tech SAS, Uruguay
+# SPDX-License-Identifier: BSL-1.1
+#
+# Mixer configuration for the enterprise e2e tests. ent_e2e.sh fills the @...@ values.
+
+[logging]
+level = "trace"
+filename = "logs/mixer.log"
+
+[store]
+dir = "./data"
+wal_max_size_mb = 500
+database_file = "flux.duckdb"
+cluster_key_file = "cluster.key"
+
+[mixer]
+machine_id = 1
+mixer_name = "ent-e2e-mixer"
+
+[api]
+port = @API_PORT@
+
+[snake]
+port = @SNAKE_PORT@
+url = "nats://127.0.0.1:@SNAKE_PORT@"
+cluster_name = "ent-e2e"
+
+[observability]
+enabled = true
+tier = "embedded"
+
+[observability.embedded]
+flush_interval = "2s"
+
+[enrollment]
+auto_adopt = true

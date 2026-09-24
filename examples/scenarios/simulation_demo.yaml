@@ -1,0 +1,281 @@
+# Simulation tutorial scenario: sim_source and sim_responder scaffolding
+# around the roaming-enrichment Rack, both ends generated.
+#
+# This is the scenario the architecture diagram in
+# https://fluxrig.org/docs/tutorials/simulation is generated from, via
+# `fluxrig-ent scenario viz examples/scenarios/simulation_demo.yaml -o <dir>`.
+#
+# The rack-issuer gears below are a schematic stand-in for the real
+# enrichment pipeline: same names, types and wiring as
+# fluxrig/examples/scenarios/roaming_enrichment.yaml, with the Bento
+# pipeline's actual mapping logic (the roaming lookup, the risk fields)
+# omitted. That file is the source of truth for what the Rack under test
+# does; this one exists to show where sim_source and sim_responder attach
+# to it, and to render a real diagram from real wiring rather than a drawing
+# someone has to keep in sync by hand.
+#
+# Run with:
+#   fluxrig-ent scenario import simulation_demo.yaml
+#
+# Scenarios are filed with `scenario import`, not `run`: import stays
+# permissive so the file lands before its Racks enroll, and activation
+# validates the deploy targets against the live registry.
+
+meta:
+  name: "simulation_demo"
+  version: "1.0.0"
+
+racks:
+  - name: "rack-scheme"
+    labels:
+      zone: "scheme"
+      role: "generates authorizations; played by sim_source instead of a real card scheme"
+  - name: "rack-issuer"
+    labels:
+      tier: "core"
+      zone: "issuer"
+      role: "the issuer's switch, between the scheme and its authorizer (unchanged from roaming_enrichment.yaml)"
+  - name: "rack-authorizer"
+    labels:
+      zone: "authorizer"
+      role: "answers as the issuer's authorizer; played by sim_responder instead of a real one"
+
+gears:
+  # ── Scheme side (this tutorial) ───────────────────────────────────────────
+  - name: "traffic"
+    type: "sim_source"
+    deploy: "rack-scheme"
+    config:
+      spec: "iso8583-v87-ascii:v2.2.0"
+      seed: 20260904
+      trigger: "on_control"          # start via Control Plane
+      rate:
+        shape: "ramp"
+        from: 10
+        to: 400
+        over: "5m"
+        duration: "10m"
+      mix:
+        - { use: "0100", weight: 85 }
+        - { use: "0200", weight: 10 }
+        - { use: "0800", weight: 5 }
+      set:
+        card.pan: "4111111111111111"
+        terminal_id: "TERM0001"
+
+  - name: "encode-scheme"
+    type: "codec_iso8583"
+    deploy: "rack-scheme"
+    config:
+      spec_path: "iso8583-v87-ascii:v2.2.0"
+      direction: "encode"
+      on_error: "reject"
+
+  - name: "dial-scheme"
+    type: "io_iso8583"
+    deploy: "rack-scheme"
+    config:
+      mode: "client"
+      connect: "127.0.0.1:8583"       # rack-issuer's scheme-in
+      frame_length_size: 2
+      frame_length_endian: "big"
+      encoding: "ascii"
+      reconnect_wait: "1s"
+
+  # ── Rack under test: schematic stand-in for roaming_enrichment.yaml ──────
+  - name: "scheme-in"
+    type: "io_iso8583"
+    deploy: "rack-issuer"
+    config:
+      mode: "server"
+      bind: ":8583"
+      frame_length_size: 2
+      frame_length_endian: "big"
+      encoding: "ascii"
+      strict_connection_routing: true
+
+  - name: "decode-scheme"
+    type: "codec_iso8583"
+    deploy: "rack-issuer"
+    config:
+      spec_path: "iso8583-v87-ascii:v2.2.0"
+      direction: "decode"
+      on_error: "reject"
+
+  - name: "enrich-roaming"
+    type: "bento"
+    deploy: "rack-issuer"
+    config:
+      bento:
+        pipeline:
+          # Stand-in only. The real pipeline reads an enrolled number, calls
+          # the roaming operator inside a time budget, and writes the
+          # outcome to a private field. See roaming_enrichment.yaml.
+          processors:
+            - mapping: "root = this"
+
+  - name: "stamp-request"
+    type: "coatcheck"
+    deploy: "rack-issuer"
+    config:
+      mode: "store"
+      bucket: "auth_in_flight"
+      key_fields: ["meta.iso8583.mti_class", "data.iso8583.field.41", "data.iso8583.field.11"]
+      key_normalize: "numeric"
+      value_fields: ["meta.conn.id"]
+      await_store: false
+
+  - name: "in-flight-daemon"
+    type: "coatcheck"
+    deploy: "rack-issuer"
+    config:
+      mode: "daemon"
+      bucket: "auth_in_flight"
+      storage: "memory"
+      replicas: 1
+      default_ttl: "30s"
+
+  - name: "encode-issuer"
+    type: "codec_iso8583"
+    deploy: "rack-issuer"
+    config:
+      spec_path: "iso8583-v87-ascii:v2.2.0"
+      direction: "encode"
+      on_error: "reject"
+
+  - name: "authorizer-out"
+    type: "io_iso8583"
+    deploy: "rack-issuer"
+    config:
+      mode: "client"
+      connect: "127.0.0.1:8590"       # rack-authorizer's listen-issuer
+      frame_length_size: 2
+      frame_length_endian: "big"
+      encoding: "ascii"
+      reconnect_wait: "1s"
+
+  - name: "decode-issuer"
+    type: "codec_iso8583"
+    deploy: "rack-issuer"
+    config:
+      spec_path: "iso8583-v87-ascii:v2.2.0"
+      direction: "decode"
+      on_error: "reject"
+
+  - name: "match-reply"
+    type: "coatcheck"
+    deploy: "rack-issuer"
+    config:
+      mode: "restore"
+      bucket: "auth_in_flight"
+      key_fields: ["meta.iso8583.mti_class", "data.iso8583.field.41", "data.iso8583.field.11"]
+      key_normalize: "numeric"
+      merge_strategy: "overwrite"
+      on_missing: "forward"
+
+  # ── Issuer side (this tutorial) ───────────────────────────────────────────
+  - name: "listen-issuer"
+    type: "io_iso8583"
+    deploy: "rack-authorizer"
+    config:
+      mode: "server"
+      bind: ":8590"
+      frame_length_size: 2
+      frame_length_endian: "big"
+      encoding: "ascii"
+      strict_connection_routing: true
+
+  - name: "decode-authorizer"
+    type: "codec_iso8583"
+    deploy: "rack-authorizer"
+    config:
+      spec_path: "iso8583-v87-ascii:v2.2.0"
+      direction: "decode"
+      on_error: "reject"
+
+  - name: "issuer"
+    type: "sim_responder"
+    deploy: "rack-authorizer"
+    config:
+      spec: "iso8583-v87-ascii:v2.2.0"
+      trigger: "on_load"
+      delay: "50ms"
+      default:
+        "39": "00"
+        "38": "$AUTH"
+      rules:
+        - name: "Insufficient funds"
+          when: "field(4) > 1000000"
+          set:
+            "39": "51"
+        - name: "Expired card"
+          when: "field(14) < 2501"
+          set:
+            "39": "54"
+        - name: "Fraud suspect"
+          when: "field(48) == 'RS01'"
+          set:
+            "39": "59"
+            "44": "FRAUD"
+          delay: "200ms"
+
+  - name: "encode-authorizer"
+    type: "codec_iso8583"
+    deploy: "rack-authorizer"
+    config:
+      spec_path: "iso8583-v87-ascii:v2.2.0"
+      direction: "encode"
+      on_error: "reject"
+
+wires:
+  # Scheme side (this tutorial)
+  - from: "traffic.out"
+    to: "encode-scheme.in"
+  - from: "encode-scheme.out"
+    to: "dial-scheme.in"
+
+  # Rack under test: request path
+  - from: "scheme-in.out"
+    to: "decode-scheme.in"
+  - from: "decode-scheme.out"
+    to: "enrich-roaming.in"
+  - from: "enrich-roaming.out"
+    to: "stamp-request.in"
+  - from: "stamp-request.out"
+    to: "encode-issuer.in"
+  - from: "encode-issuer.out"
+    to: "authorizer-out.in"
+
+  # Issuer side (this tutorial)
+  - from: "listen-issuer.out"
+    to: "decode-authorizer.in"
+  - from: "decode-authorizer.out"
+    to: "issuer.in"
+  - from: "issuer.out"
+    to: "encode-authorizer.in"
+  - from: "encode-authorizer.out"
+    to: "listen-issuer.in"
+
+  # Rack under test: reply path
+  - from: "authorizer-out.out"
+    to: "decode-issuer.in"
+  - from: "decode-issuer.out"
+    to: "match-reply.in"
+  - from: "match-reply.out"
+    to: "scheme-in.in"
+
+# Control plane commands for the demo
+# Start the traffic generator:
+#   curl -X POST http://localhost:8090/api/v1/control/sim/start \
+#     -H "Content-Type: application/json" \
+#     -d '{"gear": "traffic", "seed": 20260904}'
+#
+# Change rate at runtime:
+#   curl -X POST http://localhost:8090/api/v1/control/sim/rate \
+#     -H "Content-Type: application/json" \
+#     -d '{"gear": "traffic", "tps": 400, "shape": "ramp", "from": 10, "to": 400, "over": "5m"}'
+#
+# Stop the generator:
+#   curl -X POST http://localhost:8090/api/v1/control/sim/stop \
+#     -H "Content-Type: application/json" \
+#     -d '{"gear": "traffic"}'

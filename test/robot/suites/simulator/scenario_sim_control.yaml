@@ -1,0 +1,58 @@
+meta:
+  name: sim_control_test
+  version: "1.0.0"
+  description: "Deterministic-test scenario: same traffic config as the base, but trigger on_control so sim.start/reset reach the gear (it subscribes to the control plane only in this mode)"
+
+# Racks section is required for scenario controller to know where to push
+racks:
+  - name: sim-node-01
+
+gears:
+  # sim_source gear generates traffic under explicit control
+  - name: traffic
+    type: sim_source
+    deploy: sim-node-01
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      seed: 20260904
+      trigger: on_control
+      rate:
+        shape: constant
+        # 1 TPS: captures stay slow enough for epoch-second assertions
+        tps: 1
+        duration: 120s
+      mix:
+        - { use: "0100", weight: 85 }
+        - { use: "0200", weight: 10 }
+        - { use: "0800", weight: 5 }
+
+  # codec_iso8583 to pack the generated fields-only traffic onto the wire,
+  # for the test client to read as real ISO8583 bytes. sim_source is a logic
+  # gear: it emits fields only, the same shape codec_iso8583's own decode
+  # direction produces, so packing happens here, not in the generator.
+  - name: encoder
+    type: codec_iso8583
+    deploy: sim-node-01
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+  # sink to write packed messages onto the wire - server listening for connections
+  - name: sink
+    type: io_tcp
+    deploy: sim-node-01
+    config:
+      mode: server
+      bind: ":18583"
+      framing: "length_prefix2"
+      delimiter_append: false
+
+wires:
+  # traffic -> encoder
+  - from: traffic.out
+    to: encoder.in
+
+  # encoder -> sink
+  - from: encoder.out
+    to: sink.in

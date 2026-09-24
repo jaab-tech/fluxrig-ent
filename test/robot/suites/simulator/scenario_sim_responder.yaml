@@ -1,0 +1,77 @@
+# Copyright (c) 2026 JAAB Tech SAS, Uruguay
+# SPDX-License-Identifier: BSL-1.1
+
+meta:
+  name: sim_responder_test
+  version: "2.0.0"
+  description: "Tests for sim_responder gear - ISO8583 authorizer simulator as a pure logic gear behind io+codec"
+
+gears:
+  # io_iso8583 owns the TCP socket (server mode). Transport — listen,
+  # framing, mTLS, per-connection reply routing — is its job, not the
+  # responder's. Replies return on the originating connection via conn.id.
+  - name: iso_srv
+    type: io_iso8583
+    config:
+      mode: server
+      bind: ":10002"
+
+  # codec_iso8583 decodes requests into fluxMsg (MTI metadata +
+  # iso8583.field.N Data keys) for the responder to work.
+  - name: decoder
+    type: codec_iso8583
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: decode
+      validation: off
+
+  # sim_responder is a logic gear: decoded request in on "in", fields-only
+  # response out on "out". No listen address, no socket, no packing.
+  - name: issuer
+    type: sim_responder
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      trigger: on_load
+      delay: 50ms
+      default:
+        39: "00"
+        38: "$AUTH"
+        37: "$RRN"
+      rules:
+        - name: Insufficient funds
+          when: field(4) > 1000000
+          delay: 1ms
+          set:
+            39: "51"
+        - name: Expired card
+          when: field(14) < 2501
+          set:
+            39: "54"
+        - name: Fraud suspect
+          when: field(48) == 'RS01'
+          set:
+            39: "59"
+
+  # codec_iso8583 packs the responder's fields-only response into bytes
+  # for the io gear to frame and write back.
+  - name: encoder
+    type: codec_iso8583
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+wires:
+  # Request path: socket -> decode -> responder
+  - from: iso_srv.out
+    to: decoder.in
+
+  - from: decoder.out
+    to: issuer.in
+
+  # Response path: responder -> encode -> socket (originating connection)
+  - from: issuer.out
+    to: encoder.in
+
+  - from: encoder.out
+    to: iso_srv.in

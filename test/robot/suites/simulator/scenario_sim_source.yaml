@@ -1,0 +1,67 @@
+meta:
+  name: sim_source_test
+  version: "1.0.0"
+  description: "Tests for sim_source gear - deterministic ISO8583 traffic generation"
+
+# Racks section is required for scenario controller to know where to push
+racks:
+  - name: sim-node-01
+
+gears:
+  # sim_source gear generates traffic
+  - name: traffic
+    type: sim_source
+    deploy: sim-node-01
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      seed: 20260904
+      # on_load: auto-generates on scenario apply. Only the
+      # deterministic test uses on_control (see
+      # scenario_sim_control.yaml): it is the only one that needs
+      # sim.reset delivered, and the gear subscribes to the control
+      # plane solely in that mode.
+      trigger: on_load
+      rate:
+        shape: constant
+        # 1 TPS: the Constant rate test captures 5 messages and asserts
+        # 3s < duration < 10s. A faster rate fails the lower bound.
+        tps: 1
+        duration: 120s
+      mix:
+        - { use: "0100", weight: 85 }
+        - { use: "0200", weight: 10 }
+        - { use: "0800", weight: 5 }
+      set:
+        pan: "4111111111111111"
+        terminal_id: "TERM0001"
+
+  # codec_iso8583 to pack the generated fields-only traffic onto the wire,
+  # for the test client to read as real ISO8583 bytes. sim_source is a logic
+  # gear: it emits fields only, the same shape codec_iso8583's own decode
+  # direction produces, so packing happens here, not in the generator.
+  - name: encoder
+    type: codec_iso8583
+    deploy: sim-node-01
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+  # sink to write packed messages onto the wire - server listening for connections
+  - name: sink
+    type: io_tcp
+    deploy: sim-node-01
+    config:
+      mode: server
+      bind: ":18583"
+      framing: "length_prefix2"
+      delimiter_append: false
+
+wires:
+  # traffic -> encoder
+  - from: traffic.out
+    to: encoder.in
+
+  # encoder -> sink
+  - from: encoder.out
+    to: sink.in

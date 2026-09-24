@@ -1,0 +1,20 @@
+# Built binaries, and the directory that maps them onto the engine's names for the e2e suites
+/bin/
+
+# Local settings
+.env.local
+
+# Robot writes a symlink to each run's results and work directory next to the suites
+/test/robot/suites/*/results
+/test/robot/suites/*/work
+__pycache__/
+
+# The Python environment the e2e tests create and activate
+/test/.venv/
+
+# Coverage artifacts
+*.out
+coverage.*
+
+# The e2e tests link their work directory next to the test
+/test/e2e/*/work

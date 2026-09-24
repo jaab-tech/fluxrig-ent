@@ -1,0 +1,164 @@
+meta:
+  name: simulation_integration
+  version: "1.0.0"
+  description: "Full integration test: sim_source -> enrichment -> sim_responder"
+
+gears:
+  # 1. Scheme side: sim_source generates traffic
+  - name: scheme
+    type: sim_source
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      seed: 20260904
+      trigger: on_control
+      rate:
+        shape: ramp
+        from: 10
+        to: 400
+        over: 5m
+        duration: 10m
+      mix:
+        # No 0800: network-management messages carry no field 3/4, so
+        # the coatcheck key can never derive for them and the store
+        # drops every one (key miss is a hard error, not on_missing).
+        # 0800 coverage belongs to the responder suite, which speaks
+        # to the issuer directly.
+        - { use: "0100", weight: 90 }
+        - { use: "0200", weight: 10 }
+      set:
+        pan: "4111111111111111"
+        terminal_id: "TERM0001"
+
+  # 2. Enrichment logic (bento)
+  - name: enrichment
+    type: bento
+    config:
+      log_level: "INFO"
+      ports:
+        inputs: ["in"]
+        outputs: ["out"]
+      bento:
+        # Input auto-wired via port "in": tag the lane and pass through.
+        pipeline:
+          processors:
+            - mapping: |
+                root = content()
+                meta lane = "sim-integration"
+
+  # 3. Coatcheck for PAN tokenization
+  - name: coatcheck_store
+    type: coatcheck
+    config:
+      mode: store
+      bucket: "sim_integration"
+      # Shield the PAN across the enrichment segment. Production keys
+      # by STAN+RRN; generated traffic is mandatory-only fields (no
+      # field 11/37), so key by proc-code+amount: enough entropy for
+      # these windows, and a wrong-PAN restore cannot change the
+      # asserted codes (no rule reads the PAN). Blocking: stripping a
+      # PAN before the write succeeds would lose it.
+      key_fields: ["data.iso8583.field.3", "data.iso8583.field.4"]
+      value_fields: ["data.iso8583.field.2"]
+      await_store: true
+
+  - name: coatcheck_restore
+    type: coatcheck
+    config:
+      mode: restore
+      bucket: "sim_integration"
+      key_fields: ["data.iso8583.field.3", "data.iso8583.field.4"]
+      await_store: true
+
+  # 4. Codec to encode outgoing to issuer
+  - name: codec_issuer
+    type: codec_iso8583
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+  # 5. Issuer simulator (pure logic gear: decoded request in, fields-only
+  # response out; transport and packing belong to io/codec gears)
+  - name: issuer
+    type: sim_responder
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      trigger: on_load
+      delay: 50ms
+      default:
+        39: "00"
+        38: "$AUTH"
+      rules:
+        - name: Insufficient funds
+          when: field(4) > 1000000
+          set:
+            39: "51"
+        - name: Expired card
+          when: field(14) < 2501
+          set:
+            39: "54"
+        - name: Fraud suspect
+          when: field(48) == 'RS01'
+          set:
+            39: "59"
+            44: "FRAUD"
+          delay: 200ms
+
+  # 6. Daemon owning the KV bucket (nothing creates it otherwise:
+  # store/restore fail against a missing bucket).
+  - name: coatcheck_daemon
+    type: coatcheck
+    config:
+      mode: "daemon"
+      bucket: "sim_integration"
+      storage: "memory"
+      replicas: 1
+      default_ttl: "10m"
+
+  # 7. Codec to encode the issuer's fields-only response into bytes
+  # for the sink (neither sim_source nor sim_responder packs RawPayload)
+  - name: codec_response
+    type: codec_iso8583
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+  # 8. Sink serving decoded responses on :18584 for Capture Responses
+  - name: sink
+    type: io_tcp
+    config:
+      mode: server
+      bind: ":18584"
+      framing: "length_prefix2"
+      delimiter_append: false
+
+wires:
+  # Scheme -> Coatcheck store. sim_source emits fields-only, the same shape
+  # a decode codec would produce, so no codec sits between them.
+  - from: scheme.out
+    to: coatcheck_store.in
+
+  # Coatcheck -> Enrichment logic
+  - from: coatcheck_store.out
+    to: enrichment.in
+
+  # Enrichment logic -> Coatcheck restore
+  - from: enrichment.out
+    to: coatcheck_restore.in
+
+  # Coatcheck restore -> Codec issuer
+  - from: coatcheck_restore.out
+    to: codec_issuer.in
+
+  # Codec issuer -> Issuer
+  - from: codec_issuer.out
+    to: issuer.in
+
+  # Issuer response -> Codec response
+  - from: issuer.out
+    to: codec_response.in
+
+  # Codec response -> sink for verification captures
+  - from: codec_response.out
+    to: sink.in

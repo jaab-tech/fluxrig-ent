@@ -1,0 +1,53 @@
+# Copyright (c) 2026 JAAB Tech SAS, Uruguay
+# SPDX-License-Identifier: BSL-1.1
+
+meta:
+  name: e2e_control_after_rejoin
+  version: "1.0.0"
+  description: "sim_source idle until the Mixer commands it, with every wire inside the Rack"
+
+racks:
+  - name: rack-sim-control
+
+gears:
+  # on_control: the gear generates nothing until a sim.start command reaches it.
+  - name: traffic
+    type: sim_source
+    deploy: rack-sim-control
+    config:
+      spec: iso8583-v87-ascii:v2.2.0
+      seed: 20260921
+      trigger: on_control
+      rate:
+        shape: constant
+        tps: 20
+        duration: 120s
+      mix:
+        - { use: "0100", weight: 100 }
+      set:
+        pan: "4111111111111111"
+        terminal_id: "TERM0001"
+
+  - name: encoder
+    type: codec_iso8583
+    deploy: rack-sim-control
+    config:
+      spec_path: iso8583-v87-ascii:v2.2.0
+      direction: encode
+      validation: off
+
+  - name: sink
+    type: io_tcp
+    deploy: rack-sim-control
+    config:
+      mode: server
+      bind: ":18591"
+      framing: "length_prefix2"
+      delimiter_append: false
+
+wires:
+  - from: traffic.out
+    to: encoder.in
+
+  - from: encoder.out
+    to: sink.in

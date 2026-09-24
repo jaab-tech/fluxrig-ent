@@ -1,0 +1,242 @@
+# Copyright (c) 2026 JAAB Tech SAS, Uruguay
+# SPDX-License-Identifier: BSL-1.1
+
+# Simulator test spec - minimal valid spec for testing sim_source and sim_responder
+# Based on the reference iso8583-v87-ascii spec but trimmed for test purposes
+spec:
+  id: "sim-test"
+  name: "Simulator Test Spec"
+  version: "1.0.0"
+  protocol: iso8583
+
+  wire:
+    source: "moov:spec87ascii"
+    format: moov
+    fields:
+      # Zero-padding on fixed-length numerics
+      0: {padding: {type: Left, pad: "0"}}
+      7: {padding: {type: Left, pad: "0"}}
+      11: {padding: {type: Left, pad: "0"}}
+      12: {padding: {type: Left, pad: "0"}}
+      13: {padding: {type: Left, pad: "0"}}
+      14: {padding: {type: Left, pad: "0"}}
+      39: {padding: {type: Left, pad: "0"}}
+      41: {padding: {type: Left, pad: "0"}}
+
+  messages:
+    catalog:
+      "0100":
+        name: "Authorization Request"
+        flow: request
+        pairs_with: "0110"
+        class: business
+      "0110":
+        name: "Authorization Response"
+        flow: response
+        pairs_with: "0100"
+        class: business
+      "0200":
+        name: "Financial Request"
+        flow: request
+        pairs_with: "0210"
+        class: business
+      "0210":
+        name: "Financial Response"
+        flow: response
+        pairs_with: "0200"
+        class: business
+      "0800":
+        name: "Network Management Request"
+        flow: request
+        pairs_with: "0810"
+        class: network
+      "0810":
+        name: "Network Management Response"
+        flow: response
+        pairs_with: "0800"
+        class: network
+
+  enums:
+    response_code:
+      closed: true
+      values:
+        "00": {name: "Approved", category: "approved"}
+        "51": {name: "Insufficient funds", category: "decline_soft"}
+        "54": {name: "Expired card", category: "decline_hard"}
+        "59": {name: "Suspected fraud", category: "decline_hard"}
+    pos_entry_mode:
+      closed: true
+      values:
+        "01": {name: "Manual"}
+        "02": {name: "Magnetic stripe"}
+        "05": {name: "Chip"}
+        "07": {name: "Contactless"}
+        "90": {name: "Full track"}
+        "91": {name: "Contactless mag"}
+
+  fields:
+    0:
+      alias: "mti"
+      scope: public
+      messages:
+        - mti: ["0100", "0200", "0800"]
+          usage: mandatory
+        - mti: ["0110", "0210", "0810"]
+          usage: mandatory
+    2:
+      alias: "card.pan"
+      scope: public
+      format:
+        kind: pan
+      sensitivity: pan
+      messages:
+        - mti: ["0100", "0200"]
+          usage: mandatory
+          response_value: echo
+    4:
+      alias: "txn_amount"
+      scope: public
+      format:
+        kind: amount
+        currency_field: 49
+      messages:
+        - mti: ["0100", "0200"]
+          usage: mandatory
+        - mti: ["0110", "0210"]
+          usage: mandatory
+          response_value: modified
+    7:
+      alias: "txn_datetime"
+      scope: public
+      format:
+        kind: datetime
+        layout: "MMDDhhmmss"
+      messages:
+        - mti: ["0100", "0200", "0800"]
+          usage: mandatory
+    11:
+      alias: "stan"
+      scope: public
+      messages:
+        - mti: ["0100", "0200"]
+          usage: mandatory
+        - mti: ["0110", "0210"]
+          usage: mandatory
+          response_value: echo
+    14:
+      alias: "expiry"
+      scope: public
+      format:
+        kind: date
+        layout: "YYMM"
+      messages:
+        - mti: ["0100", "0200"]
+          usage: mandatory
+    22:
+      alias: "pos_entry_mode"
+      scope: public
+      values_ref: "pos_entry_mode"
+      messages:
+        - mti: ["0100", "0200"]
+          usage: mandatory
+    39:
+      alias: "resp_code"
+      scope: public
+      values_ref: "response_code"
+      messages:
+        - mti: ["0110", "0210", "0810"]
+          usage: mandatory
+    41:
+      alias: "terminal_id"
+      scope: public
+      messages:
+        - mti: ["0100", "0200"]
+          usage: mandatory
+          response_value: echo
+    48:
+      alias: "addl_data"
+      scope: public
+      messages:
+        - mti: ["0110", "0210"]
+          usage: optional
+          response_value: new
+    49:
+      alias: "txn_currency"
+      scope: public
+      values_ref: "currency_iso4217"
+      messages:
+        - mti: ["0100", "0200"]
+          usage: mandatory
+    70:
+      alias: "net_mgmt_code"
+      scope: public
+      values_ref: "network_mgmt_code"
+      messages:
+        - mti: ["0800", "0810"]
+          usage: mandatory
+
+  x-fluxrig-simulation:
+    mix:
+      - use: "0100"
+        weight: 85
+      - use: "0200"
+        weight: 10
+      - use: "0800"
+        weight: 5
+
+    defaults:
+      7: "$NOW"
+      11: "$SEQ(1)"
+      12: "$NOW"
+      13: "$NOW"
+      37: "$RRN"
+    "0100":
+      0: "0100"
+      2:
+        choose:
+          - {value: "$PAN(4111, 16)", weight: 70}
+          - {value: "$PAN(5500, 16)", weight: 25}
+          - {value: "$PAN(340000, 15)", weight: 5}
+      3:
+        choose:
+          from: processing_txn_type
+      4: "$RAND(100, 5000)"
+      22:
+        choose:
+          from: pos_entry_mode
+          weights: {"05": 60, "07": 25, "90": 15}
+      41: "TERM0001"
+      42: "MERCHANT0000001"
+      49:
+        choose:
+          from: currency_iso4217
+    "0200":
+      0: "0200"
+      2: "$PAN(4111, 16)"
+      3: "000000"
+      4: "$RAND(100, 20000)"
+      22: "$ENUM"
+      41: "TERM0001"
+      42: "MERCHANT0000001"
+      49: "858"
+    "0800":
+      0: "0800"
+      70:
+        choose:
+          from: network_mgmt_code
+          weights: {"301": 90}
+    responder:
+      echo: valid_in_response
+      delay: 50ms
+      default:
+        39: "00"
+        38: "$AUTH"
+      rules:
+        - name: "Insufficient funds over limit"
+          when: field(4) > 1000000
+          set:
+            39: "51"
+        - name: "Expired card"
+          when: field(14) < 2501
+          set:
+            39: "54"
