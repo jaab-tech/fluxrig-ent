@@ -79,6 +79,51 @@ func TestGenerator_UUIDIsDeterministicUnderTheSeed(t *testing.T) {
 	assert.Equal(t, a, first.expandMacro("$UUID", 0, nil), "a reset to the seed replays it")
 }
 
+// TestGenerator_Validate is a regression test for a real bug: resolveFieldMap
+// silently dropped a Defaults/Set/Templates key that named no field, and
+// expandMacro's default case returned an unknown $MACRO literally, so neither a
+// mistyped field key nor a mistyped macro ever failed at apply time as the
+// equivalent sim_responder.Responder.Validate already did.
+func TestGenerator_Validate(t *testing.T) {
+	newGen := func(cfg Config) *Generator {
+		cfg.Seed = 1
+		spec, meta, content := loadTestSpec(t)
+		gen := NewGeneratorFromContent(content, spec, meta, cfg, &mockIDGenerator{})
+		gen.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		return gen
+	}
+	freshConfig := func() Config {
+		return Config{
+			Defaults:  map[string]string{"39": "00", "38": "$AUTH"},
+			Set:       map[string]string{"11": "$SEQ(stan, 1)"},
+			Templates: map[string]map[string]string{"0100": {"38": "$RAND(1, 100)"}},
+		}
+	}
+	require.NoError(t, newGen(freshConfig()).Validate())
+
+	cases := map[string]struct {
+		mutate func(*Config)
+		want   string
+	}{
+		"a defaults key that names no field":  {func(c *Config) { c.Defaults["nope"] = "x" }, "neither a field number nor an alias"},
+		"a field number below one":            {func(c *Config) { c.Defaults["0"] = "x" }, "positive"},
+		"a macro that does not exist":         {func(c *Config) { c.Defaults["38"] = "$auth" }, "unknown macro"},
+		"a set key that names no field":       {func(c *Config) { c.Set["nope"] = "x" }, "neither a field number nor an alias"},
+		"a template key that names no field":  {func(c *Config) { c.Templates["0100"]["nope"] = "x" }, "neither a field number nor an alias"},
+		"a RAND that is not a number":         {func(c *Config) { c.Templates["0100"]["38"] = "$RAND(1, many)" }, "not an integer"},
+		"a SEQ start that is not a number":    {func(c *Config) { c.Set["11"] = "$SEQ(stan, x)" }, "start"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := freshConfig()
+			tc.mutate(&cfg)
+			err := newGen(cfg).Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
 // A gear with nothing to build a message from would start and emit nothing useful.
 func TestGenerator_HasValueSource(t *testing.T) {
 	assert.False(t, (&Generator{}).HasValueSource())
@@ -111,6 +156,37 @@ func TestGenerator_NowFollowsTheTimezone(t *testing.T) {
 
 	assert.Equal(t, "260922000001", render("Asia/Tokyo", "$RRN", 37), "the date of the RRN follows the zone")
 	assert.Equal(t, "260921000001", render("GMT", "$RRN", 37))
+}
+
+// TestGenerator_DeterministicClockIsFixedAndSeedDerived is a regression test for a
+// real bug: $NOW (and the expiry-date arithmetic) always fell back to time.Now() in
+// production, so output that was otherwise fully reproducible under a seed still
+// drifted with wall-clock time. DeterministicClock fixes $NOW to an instant derived
+// from Seed instead: it must not advance during a run, and the same seed must always
+// derive the same instant.
+func TestGenerator_DeterministicClockIsFixedAndSeedDerived(t *testing.T) {
+	newDetGen := func(seed int64) *Generator {
+		spec, meta, content := loadTestSpec(t)
+		gen := NewGeneratorFromContent(content, spec, meta, Config{Seed: seed, DeterministicClock: true}, &mockIDGenerator{})
+		gen.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		gen.loc = time.UTC
+		return gen
+	}
+	const datetime = 7 // DE 7 of the reference spec
+
+	gen := newDetGen(42)
+	first := gen.expandMacro("$NOW", datetime, nil)
+	second := gen.expandMacro("$NOW", datetime, nil)
+	assert.Equal(t, first, second, "a deterministic clock advanced within a single run")
+
+	// A freshly built generator, same seed: building it does real work in between
+	// (parsing the spec, etc.), so this would also catch a clock that quietly still
+	// tracked wall-clock time despite the two calls above matching by coincidence.
+	again := newDetGen(42).expandMacro("$NOW", datetime, nil)
+	assert.Equal(t, first, again, "the same seed produced a different deterministic instant across generators")
+
+	other := newDetGen(43).expandMacro("$NOW", datetime, nil)
+	assert.NotEqual(t, first, other, "two different seeds produced the same deterministic instant")
 }
 
 func TestGenerator_ATimezoneThatDoesNotResolveFallsBackToLocal(t *testing.T) {

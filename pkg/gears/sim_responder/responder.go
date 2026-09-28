@@ -57,6 +57,9 @@ type Responder struct {
 // NewResponder creates a new responder.
 func NewResponder(spec *sdl.Spec, meta *sdl.FieldMeta, cfg Config, idgen sdk.IDGenerator) *Responder {
 	src := rand.NewPCG(uint64(time.Now().UnixNano()), 0)
+	if cfg.Seed != 0 {
+		src = rand.NewPCG(uint64(cfg.Seed), uint64(cfg.Seed>>32))
+	}
 	baseDelay, _ := ParseDelay(cfg.Delay)
 	// Validate refuses a timezone that does not resolve, so a failure here falls back to
 	// the machine's zone.
@@ -80,11 +83,21 @@ func (r *Responder) SetLogger(logger *slog.Logger) {
 	r.logger = logger
 }
 
-// now is the instant $NOW and $RRN render, in the configured zone.
+// deterministicClockEpoch is the fixed reference instant DeterministicClock
+// offsets by Seed, matching sim_source.Generator's own epoch: the date carries
+// no meaning beyond reading as a plausible instant rather than the Unix epoch.
+var deterministicClockEpoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// now is the instant $NOW and $RRN render, in the configured zone. It does not
+// advance during a run when derived from the seed: a fixed instant is what
+// makes $NOW replay identically run over run.
 func (r *Responder) now() time.Time {
 	t := time.Now()
-	if r.clock != nil {
+	switch {
+	case r.clock != nil:
 		t = r.clock()
+	case r.cfg.DeterministicClock:
+		t = deterministicClockEpoch.Add(simmacro.SeedOffset(r.cfg.Seed))
 	}
 	if r.loc != nil {
 		return t.In(r.loc)
@@ -93,27 +106,22 @@ func (r *Responder) now() time.Time {
 }
 
 // ResetCounters clears the macro sequence counters ($SEQ, $RRN, and the $STAN that
-// is generated when the request carries none).
+// is generated when the request carries none). When cfg.Seed is set, it also
+// reseeds the RNG behind $AUTH/$RAND/$ENUM, so a sim.reset replays the exact
+// same sequence of replies as the last one, not a continuation of it.
 func (r *Responder) ResetCounters() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seqCounters = make(map[string]uint64)
+	if r.cfg.Seed != 0 {
+		r.rand = rand.New(rand.NewPCG(uint64(r.cfg.Seed), uint64(r.cfg.Seed>>32)))
+	}
 }
 
 // knownMacros are the macros expandMacro implements.
 var knownMacros = map[string]bool{
 	"AUTH": true, "RRN": true, "STAN": true, "SEQ": true,
 	"RAND": true, "UUID": true, "NOW": true, "ENUM": true,
-}
-
-// macroName returns the name of a macro template such as $SEQ(name, 5), or "" when the
-// template is a literal.
-func macroName(template string) string {
-	if !strings.HasPrefix(template, "$") {
-		return ""
-	}
-	name, _, _ := strings.Cut(template[1:], "(")
-	return name
 }
 
 // Validate checks the configuration the way a request would use it, so that a scenario
@@ -179,40 +187,12 @@ func (r *Responder) validateSet(set map[string]string) error {
 			}
 			return fmt.Errorf("%q is neither a field number nor an alias of the spec", k)
 		}
-		if name := macroName(set[k]); strings.HasPrefix(set[k], "$") {
+		if name := simmacro.Name(set[k]); strings.HasPrefix(set[k], "$") {
 			if !knownMacros[name] {
 				return fmt.Errorf("field %q: unknown macro %q", k, "$"+name)
 			}
-			if err := validateMacroArgs(name, set[k]); err != nil {
+			if err := simmacro.ValidateArgs(name, set[k]); err != nil {
 				return fmt.Errorf("field %q: %w", k, err)
-			}
-		}
-	}
-	return nil
-}
-
-// validateMacroArgs checks the arguments of the macros that take them, which would
-// otherwise fall back to their defaults without a word.
-func validateMacroArgs(name, template string) error {
-	_, args, _ := strings.Cut(template, "(")
-	parts := simmacro.Args(strings.TrimSuffix(args, ")"))
-	switch name {
-	case "RAND":
-		if len(parts) > 2 {
-			return fmt.Errorf("$RAND takes at most two arguments, min and max")
-		}
-		for _, p := range parts {
-			if _, err := strconv.Atoi(p); err != nil {
-				return fmt.Errorf("$RAND: %q is not an integer", p)
-			}
-		}
-	case "SEQ":
-		if len(parts) > 2 {
-			return fmt.Errorf("$SEQ takes at most two arguments, name and start")
-		}
-		if len(parts) == 2 {
-			if _, err := strconv.ParseUint(parts[1], 10, 64); err != nil {
-				return fmt.Errorf("$SEQ: the start %q is not a non-negative integer", parts[1])
 			}
 		}
 	}
@@ -251,11 +231,19 @@ func (r *Responder) ProcessRequest(ctx context.Context, req *fluxmsg.FluxMsg) (*
 		r.echoValidFields(req, respFields, respMTI)
 	}
 
-	// 2. Apply defaults
-	for k, v := range r.cfg.Default {
+	// 2. Apply defaults. Sorted by key: expandMacro draws from the responder's
+	// RNG for $RAND/$SEQ/etc, and map iteration order is randomized per run,
+	// so an unsorted range here consumes the RNG stream in a different order
+	// every run even with an identical seed.
+	defaultKeys := make([]string, 0, len(r.cfg.Default))
+	for k := range r.cfg.Default {
+		defaultKeys = append(defaultKeys, k)
+	}
+	sort.Strings(defaultKeys)
+	for _, k := range defaultKeys {
 		fieldID := r.resolveFieldKey(k)
 		if fieldID > 0 {
-			respFields[fieldID] = r.expandMacro(v, fieldID, req, respFields)
+			respFields[fieldID] = r.expandMacro(r.cfg.Default[k], fieldID, req, respFields)
 		}
 	}
 
@@ -264,10 +252,16 @@ func (r *Responder) ProcessRequest(ctx context.Context, req *fluxmsg.FluxMsg) (*
 	for _, rule := range r.cfg.Rules {
 		if r.evalWhen(rule.When, req) {
 			r.logger.Debug("Rule matched", "rule", rule.Name, "when", rule.When)
-			for k, v := range rule.Set {
+			// Same ordering concern as the defaults loop above.
+			setKeys := make([]string, 0, len(rule.Set))
+			for k := range rule.Set {
+				setKeys = append(setKeys, k)
+			}
+			sort.Strings(setKeys)
+			for _, k := range setKeys {
 				fieldID := r.resolveFieldKey(k)
 				if fieldID > 0 {
-					respFields[fieldID] = r.expandMacro(v, fieldID, req, respFields)
+					respFields[fieldID] = r.expandMacro(rule.Set[k], fieldID, req, respFields)
 				}
 			}
 			// Apply rule-specific delay (overrides base)
@@ -622,5 +616,8 @@ func (r *Responder) macroENUM(fieldID int) string {
 	for k := range enum.Values {
 		keys = append(keys, k)
 	}
+	// Sorted for the same reason as chooseFromEnum in sim_source/generator.go:
+	// map iteration order is randomized per run, and this consumes r.rand.
+	sort.Strings(keys)
 	return keys[r.rand.IntN(len(keys))]
 }

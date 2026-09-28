@@ -45,6 +45,7 @@ type Gear struct {
 	liveLoops  atomic.Int64 // the generation loops that have not ended
 	running    bool
 	stopCh     chan struct{}
+	genDone    chan struct{} // closed when the running generation loop exits; nil when none is running
 	ctrlCh     <-chan ctrl.Command
 	ctrlCancel context.CancelFunc
 
@@ -87,6 +88,9 @@ func (g *Gear) Init(ctx sdk.GearContext) error {
 	}
 	if tz, ok := config["timezone"].(string); ok {
 		g.cfg.Timezone = tz
+	}
+	if det, ok := config["deterministic_clock"].(bool); ok {
+		g.cfg.DeterministicClock = det
 	}
 
 	// Parse rate config. Numeric fields accept any YAML/JSON number
@@ -216,6 +220,15 @@ func (g *Gear) Init(ctx sdk.GearContext) error {
 	if err := validateShape(g.cfg.Rate.Shape); err != nil {
 		return err
 	}
+	if !validRate(g.cfg.Rate.TPS) {
+		return fmt.Errorf("rate.tps must be a finite number from 0 to %d, got %v", maxTPS, g.cfg.Rate.TPS)
+	}
+	if !validRate(g.cfg.Rate.From) {
+		return fmt.Errorf("rate.from must be a finite number from 0 to %d, got %v", maxTPS, g.cfg.Rate.From)
+	}
+	if !validRate(g.cfg.Rate.To) {
+		return fmt.Errorf("rate.to must be a finite number from 0 to %d, got %v", maxTPS, g.cfg.Rate.To)
+	}
 	if _, err := simmacro.Location(g.cfg.Timezone); err != nil {
 		return err
 	}
@@ -236,6 +249,9 @@ func (g *Gear) Init(ctx sdk.GearContext) error {
 	g.generator.SetLogger(g.logger)
 	if !g.generator.HasValueSource() {
 		return fmt.Errorf("spec %q has no x-fluxrig-simulation section and the gear configuration gives no defaults, templates or set: there is nothing to generate from", g.cfg.Spec)
+	}
+	if err := g.generator.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	// Build rate engine
@@ -258,6 +274,7 @@ func (g *Gear) Start(ctx context.Context, emit func(*fluxmsg.FluxMsg)) error {
 	g.mu.Lock()
 	g.emit = emit
 	g.stopCh = make(chan struct{})
+	alreadyControlling := g.ctrlCh != nil
 	g.mu.Unlock()
 
 	g.logger.Info("Starting sim_source",
@@ -266,16 +283,39 @@ func (g *Gear) Start(ctx context.Context, emit func(*fluxmsg.FluxMsg)) error {
 		"type", "sim_source",
 	)
 
-	// Subscribe to control plane if trigger is on_control
+	// Subscribe to control plane if trigger is on_control. ch/spawnControlLoop
+	// stay unset when a prior Start already subscribed, or when there is no
+	// control plane to subscribe to: either way there must be at most one
+	// controlLoop goroutine dispatching for this gear.
+	var controlCh <-chan ctrl.Command
+	spawnControlLoop := false
 	if g.cfg.Trigger == "on_control" {
-		if cp, ok := g.getControlPlane(); ok {
+		if alreadyControlling {
+			// A prior Start already subscribed and has a controlLoop running
+			// (Drain/Stop clear ctrlCh when they actually stop it). Spawning
+			// a second one here would race it on the same control-plane
+			// channel.
+			g.logger.Warn("sim_source Start called while already subscribed to the control plane; ignoring the duplicate subscription")
+		} else if cp, ok := g.getControlPlane(); ok {
 			ch, err := cp.Subscribe(g.name)
 			if err != nil {
 				// A gear that waits for sim.start and cannot hear it would sit idle for
 				// good with nothing but a log line to say so.
 				return fmt.Errorf("subscribe to the control plane: %w", err)
 			}
+			// controlLoop needs its own cancellation, independent of ctx:
+			// see the comment on controlLoop for why selecting on g.stopCh
+			// instead would be wrong, and why Drain/Stop calling a real
+			// ctrlCancel (rather than the no-op nil check that used to be
+			// here) is what actually ends it.
+			ctrlCtx, cancel := context.WithCancel(ctx)
+			g.mu.Lock()
 			g.ctrlCh = ch
+			g.ctrlCancel = cancel
+			g.mu.Unlock()
+			controlCh = ch
+			ctx = ctrlCtx
+			spawnControlLoop = true
 			g.logger.Info("Subscribed to control plane for sim.start/stop/rate commands")
 		}
 	}
@@ -285,8 +325,11 @@ func (g *Gear) Start(ctx context.Context, emit func(*fluxmsg.FluxMsg)) error {
 	case "on_load":
 		g.startGeneration(ctx)
 	case "on_control":
-		// Wait for sim.start command
-		go g.controlLoop(ctx)
+		// Wait for sim.start command. Only spawned once per subscription: see
+		// the guard above.
+		if spawnControlLoop {
+			go g.controlLoop(ctx, controlCh)
+		}
 	case "on_schedule":
 		// Cron/RFC3339 scheduling is roadmap, not scaffolding: fail the
 		// scenario at apply time rather than run silent and trafficless.
@@ -309,13 +352,23 @@ func (g *Gear) Drain(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.ctrlCancel != nil {
-		g.ctrlCancel()
-	}
+	g.stopControlLoopLocked()
 	g.closeStopLocked()
 	g.running = false
 	g.logger.Info("Drained sim_source")
 	return nil
+}
+
+// stopControlLoopLocked cancels the running controlLoop, if any, and clears
+// ctrlCh/ctrlCancel so a later Start correctly recognizes it needs to
+// resubscribe rather than treating this Gear as still under control. The
+// caller holds mu.
+func (g *Gear) stopControlLoopLocked() {
+	if g.ctrlCancel != nil {
+		g.ctrlCancel()
+	}
+	g.ctrlCancel = nil
+	g.ctrlCh = nil
 }
 
 // closeStopLocked ends the generation loop. It is safe to call more than once and
@@ -336,9 +389,7 @@ func (g *Gear) Stop() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.ctrlCancel != nil {
-		g.ctrlCancel()
-	}
+	g.stopControlLoopLocked()
 	g.closeStopLocked()
 	g.running = false
 	g.logger.Info("Stopped sim_source")
@@ -453,6 +504,14 @@ func (g *Gear) startGeneration(ctx context.Context) {
 	// sim.start makes a new one: reading g.stopCh again on every turn would hand the old
 	// loop the new channel, and it would never end.
 	stopCh := g.stopCh
+	// Snapshotting emit here, rather than reading g.emit from the goroutine below,
+	// avoids a data race against Start's own g.emit = emit write, which is not
+	// synchronized with this goroutine any other way.
+	emit := g.emit
+	// done lets a following sim.start/sim.reset wait for this exact loop to actually
+	// exit before spawning the next one: see waitForGenerationLoopToExit.
+	done := make(chan struct{})
+	g.genDone = done
 	g.mu.Unlock()
 
 	// Init validated the duration; zero means no limit.
@@ -460,6 +519,7 @@ func (g *Gear) startGeneration(ctx context.Context) {
 
 	g.liveLoops.Add(1)
 	go func() {
+		defer close(done)
 		defer g.liveLoops.Add(-1)
 		ticker := g.rateEngine.Ticker()
 		defer ticker.Stop()
@@ -492,11 +552,37 @@ func (g *Gear) startGeneration(ctx context.Context) {
 					continue
 				}
 				if msg != nil {
-					g.emit(msg)
+					emit(msg)
 				}
 			}
 		}
 	}()
+}
+
+// generationLoopExitTimeout bounds waitForGenerationLoopToExit. The loop's own
+// select reacts to a closed stopCh on its next scheduling turn, so this is a
+// safety margin against something unexpected (e.g. emit blocking on a full
+// downstream port), not a wait this is normally expected to spend.
+const generationLoopExitTimeout = 5 * time.Second
+
+// waitForGenerationLoopToExit blocks until the most recently started generation
+// loop has actually returned, or the timeout elapses. sim.start and sim.reset both
+// close the running loop's stopCh and then spawn a new one immediately: without
+// this, the old loop's goroutine could still be mid-shutdown (ticker.Stop,
+// liveLoops.Add(-1)) while the new one is already emitting, and both would emit
+// at once for that window.
+func (g *Gear) waitForGenerationLoopToExit() {
+	g.mu.Lock()
+	done := g.genDone
+	g.mu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(generationLoopExitTimeout):
+		g.logger.Warn("Timed out waiting for the previous generation loop to exit before starting the next one")
+	}
 }
 
 // controlLoop dispatches control-plane commands for the gear's whole
@@ -510,15 +596,17 @@ func (g *Gear) startGeneration(ctx context.Context) {
 // g.ctrlCh afterward: a following sim.start was queued and acknowledged
 // (the Mixer's confirmed-delivery only requires that), never dequeued,
 // and never logged as received. A dead, but not shut down, control loop.
-func (g *Gear) controlLoop(ctx context.Context) {
-	if g.ctrlCh == nil {
-		return
-	}
+//
+// ch is the channel Start subscribed at the time this loop was spawned,
+// passed explicitly rather than read back from g.ctrlCh: Stop/Drain clear
+// that field under g.mu from another goroutine, and reading it here without
+// the lock raced against those writes.
+func (g *Gear) controlLoop(ctx context.Context, ch <-chan ctrl.Command) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case cmd := <-g.ctrlCh:
+		case cmd := <-ch:
 			g.handleControlCommand(cmd)
 		}
 	}
@@ -577,8 +665,8 @@ func (g *Gear) applyRate(args map[string]string) {
 	var tps float64
 	if v, ok := args["tps"]; ok {
 		parsed, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			g.logger.Warn("Ignoring sim.rate: tps is not a number", "tps", v)
+		if err != nil || !validRate(parsed) {
+			g.logger.Warn("Ignoring sim.rate: tps is not a usable rate", "tps", v)
 			return
 		}
 		tps = parsed
@@ -601,12 +689,23 @@ func (g *Gear) handleControlCommand(cmd ctrl.Command) {
 		// Recreate stopCh: a previous sim.stop closes it, and a loop
 		// selecting a closed channel exits immediately.
 		g.mu.Lock()
+		previouslyStopped := false
 		select {
 		case <-g.stopCh:
 			g.stopCh = make(chan struct{})
+			previouslyStopped = true
 		default:
 		}
 		g.mu.Unlock()
+		if previouslyStopped {
+			// The previous loop may still be mid-shutdown; wait for it to
+			// actually exit before spawning a new one on a fresh stopCh, or
+			// both emit at once for that window. Skipped when nothing was
+			// stopped (the gear is still running): startGeneration's own
+			// guard makes this call a no-op then, and waiting here would
+			// block on a loop that has no reason to exit.
+			g.waitForGenerationLoopToExit()
+		}
 		g.startGeneration(context.Background())
 	case ctrl.CmdSimStop:
 		g.logger.Info("Received sim.stop command")
@@ -642,6 +741,10 @@ func (g *Gear) handleControlCommand(cmd ctrl.Command) {
 		}
 		g.mu.Unlock()
 		if wasRunning {
+			// The loop we just signaled via closeStopLocked may still be
+			// mid-shutdown: wait for it to actually exit before spawning the
+			// next one, or both emit at once for that window.
+			g.waitForGenerationLoopToExit()
 			g.startGeneration(context.Background())
 		}
 	}

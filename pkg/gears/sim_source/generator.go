@@ -189,6 +189,71 @@ func (g *Generator) HasValueSource() bool {
 		len(g.cfg.Defaults) > 0 || len(g.cfg.Templates) > 0 || len(g.cfg.Set) > 0
 }
 
+// knownMacros are the macros expandMacro implements.
+var knownMacros = map[string]bool{
+	"PAN": true, "STAN": true, "RRN": true, "SEQ": true, "RAND": true,
+	"UUID": true, "NOW": true, "ENUM": true, "INVALID": true, "AUTH": true,
+}
+
+// Validate checks the gear's field overrides the way Generate would use them, so
+// that a scenario with a mistake fails when it is applied and not by silently
+// generating the wrong thing: resolveFieldMap drops a key that names no field
+// with no error, and expandMacro's default case returns an unknown $MACRO
+// literally, so neither catches a mistake on its own.
+func (g *Generator) Validate() error {
+	if err := g.validateFieldMap(g.cfg.Defaults); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
+	if err := g.validateFieldMap(g.cfg.Set); err != nil {
+		return fmt.Errorf("set: %w", err)
+	}
+	mtis := make([]string, 0, len(g.cfg.Templates))
+	for mti := range g.cfg.Templates {
+		mtis = append(mtis, mti)
+	}
+	sort.Strings(mtis)
+	for _, mti := range mtis {
+		if err := g.validateFieldMap(g.cfg.Templates[mti]); err != nil {
+			return fmt.Errorf("templates[%s]: %w", mti, err)
+		}
+	}
+	return nil
+}
+
+// validateFieldMap checks the keys and the macros of a map of field overrides
+// (Defaults, Set, or one MTI's Templates entry).
+func (g *Generator) validateFieldMap(fields map[string]string) error {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if id, err := strconv.Atoi(k); err == nil {
+			if id <= 0 {
+				return fmt.Errorf("field %q: a field number must be positive", k)
+			}
+		} else if _, ok := g.meta.IDByAlias[k]; !ok {
+			for id, subs := range g.meta.SubAliases {
+				if _, isSub := subs[k]; isSub {
+					return fmt.Errorf("%q names a subfield of field %d: set the whole field", k, id)
+				}
+			}
+			return fmt.Errorf("%q is neither a field number nor an alias of the spec", k)
+		}
+		v := fields[k]
+		if name := simmacro.Name(v); strings.HasPrefix(v, "$") {
+			if !knownMacros[name] {
+				return fmt.Errorf("field %q: unknown macro %q", k, "$"+name)
+			}
+			if err := simmacro.ValidateArgs(name, v); err != nil {
+				return fmt.Errorf("field %q: %w", k, err)
+			}
+		}
+	}
+	return nil
+}
+
 // ResetCounters resets all sequence counters (STAN, RRN, named sequences)
 // to their initial state. This is used for deterministic testing.
 func (g *Generator) ResetCounters() {
@@ -435,9 +500,17 @@ func (g *Generator) Generate() (*fluxmsg.FluxMsg, error) {
 		fieldValues[fieldID] = g.synthesizeField(fieldID, fieldValues)
 	}
 
-	// Apply Set values (override everything)
-	for fieldID, val := range setFields {
-		fieldValues[fieldID] = g.expandMacro(val, fieldID, fieldValues)
+	// Apply Set values (override everything). Sorted by field ID: expandMacro
+	// draws from g.rand for $RAND/$AUTH/etc, and map iteration order is
+	// randomized per run, so an unsorted range here consumes the RNG stream
+	// in a different order every run even with an identical seed.
+	setIDs := make([]int, 0, len(setFields))
+	for fieldID := range setFields {
+		setIDs = append(setIDs, fieldID)
+	}
+	sort.Ints(setIDs)
+	for _, fieldID := range setIDs {
+		fieldValues[fieldID] = g.expandMacro(setFields[fieldID], fieldID, fieldValues)
 	}
 
 	// Create FluxMsg. sim_source is a logic gear: it resolves field values
@@ -485,9 +558,16 @@ func (g *Generator) selectMTI() string {
 		}
 	}
 	if len(mix) == 0 {
-		// Default to first request MTI in catalog
-		for mti, msg := range g.spec.Messages.Catalog {
-			if msg.Flow == "request" {
+		// Default to first request MTI in catalog, by sorted key: map
+		// iteration order is randomized per run, and this path must give
+		// the same answer every time for the same spec.
+		mtis := make([]string, 0, len(g.spec.Messages.Catalog))
+		for mti := range g.spec.Messages.Catalog {
+			mtis = append(mtis, mti)
+		}
+		sort.Strings(mtis)
+		for _, mti := range mtis {
+			if g.spec.Messages.Catalog[mti].Flow == "request" {
 				return mti
 			}
 		}
@@ -895,11 +975,22 @@ func zoneOf(name string) *time.Location {
 	return loc
 }
 
-// now is the instant $NOW and $RRN render, in the configured zone.
+// deterministicClockEpoch is the fixed reference instant DeterministicClock
+// offsets by Seed. The date itself carries no meaning; it was chosen only to
+// read as a plausible instant rather than the Unix epoch.
+var deterministicClockEpoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// now is the instant $NOW and $RRN render, in the configured zone. It does not
+// advance during a run when derived from the seed: a fixed instant, not a
+// simulated clock, is what makes $NOW and the expiry-date arithmetic replay
+// identically run over run.
 func (g *Generator) now() time.Time {
 	t := time.Now()
-	if g.clock != nil {
+	switch {
+	case g.clock != nil:
 		t = g.clock()
+	case g.cfg.DeterministicClock:
+		t = deterministicClockEpoch.Add(simmacro.SeedOffset(g.cfg.Seed))
 	}
 	if g.loc != nil {
 		return t.In(g.loc)

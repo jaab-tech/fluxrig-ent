@@ -72,6 +72,11 @@ const configSchema = `{
       "default": "local",
       "description": "The clock that $NOW and $RRN render: local, GMT (or UTC), or a zone name such as America/Montevideo."
     },
+    "deterministic_clock": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, $NOW, $RRN and the expiry-date arithmetic use a fixed instant derived from seed instead of the wall clock, so output timestamps replay identically run over run. Default false keeps timestamps tracking real time."
+    },
     "rate": {
       "type": "object",
       "description": "Rate shape: shape (constant, ramp, poisson [Roadmap], spike [Roadmap]), tps, from, to, over, duration.",

@@ -71,6 +71,9 @@ func Sign(priv ed25519.PrivateKey, grant Grant) (*File, error) {
 // Verify checks the file's signature against pub and, only once the
 // signature holds, decodes and returns the grant it certifies.
 func (f *File) Verify(pub ed25519.PublicKey) (*Grant, error) {
+	if f == nil {
+		return nil, fmt.Errorf("license: no licence file to verify")
+	}
 	if !ed25519.Verify(pub, f.Payload, f.Signature) {
 		return nil, fmt.Errorf("license: signature does not verify; the file is corrupt or was not issued by JAAB Tech")
 	}
