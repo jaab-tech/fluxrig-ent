@@ -15,6 +15,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -168,6 +170,66 @@ func TestRateEngine_UpdateRate(t *testing.T) {
 	})
 }
 
+// TestRateEngine_RejectsNonFiniteAndOutOfRangeRates is a regression test for a real
+// bug: calculateInterval only guarded currentTPS <= 0, so a NaN (NaN <= 0 is false in
+// Go) or an extreme TPS whose inverse rounds a time.Duration to zero or beyond int64
+// range reached time.NewTicker/.Reset, which panics on a non-positive interval.
+// strconv.ParseFloat parses "nan" and "inf" without error, so a sim.rate command with
+// either string reached this the same way a hand-built float would.
+func TestRateEngine_RejectsNonFiniteAndOutOfRangeRates(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("calculateInterval never returns a non-positive duration", func(t *testing.T) {
+		engine := NewRateEngine(RateConfig{Shape: "constant", TPS: 100}, logger)
+		t.Cleanup(engine.Stop)
+
+		for _, tps := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), 1e18, -1} {
+			engine.mu.Lock()
+			engine.currentTPS = tps
+			interval := engine.calculateInterval()
+			engine.mu.Unlock()
+			assert.Greater(t, interval, time.Duration(0), "tps %v produced a non-positive interval", tps)
+		}
+	})
+
+	t.Run("UpdateRate with a non-finite tps never reaches a panicking ticker", func(t *testing.T) {
+		engine := NewRateEngine(RateConfig{Shape: "constant", TPS: 100}, logger)
+		t.Cleanup(engine.Stop)
+		ticker := engine.Ticker()
+
+		require.NotPanics(t, func() {
+			engine.UpdateRate(math.NaN(), "constant", "", "", "")
+		})
+		require.NotPanics(t, func() {
+			ticker.Reset(engine.calculateInterval())
+		})
+	})
+
+	t.Run("UpdateRate ignores an unusable from/to instead of adopting it", func(t *testing.T) {
+		engine := NewRateEngine(RateConfig{Shape: "ramp", From: 10, To: 100, Over: "1s"}, logger)
+		t.Cleanup(engine.Stop)
+		engine.Ticker()
+
+		engine.UpdateRate(0, "ramp", "nan", "inf", "1s")
+
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		assert.Equal(t, 10.0, engine.cfg.From, "an unparseable from replaced the previous, valid one")
+		assert.Equal(t, 100.0, engine.cfg.To, "an unparseable to replaced the previous, valid one")
+	})
+
+	t.Run("a sim.rate command with tps=nan is ignored, not applied", func(t *testing.T) {
+		g, _ := newControlGear(t, controlTestConfig())
+		g.rateEngine.Ticker()
+
+		g.handleControlCommand(ctrl.Command{Cmd: ctrl.CmdSimRate, Args: map[string]string{"tps": "nan"}})
+
+		g.rateEngine.mu.Lock()
+		defer g.rateEngine.mu.Unlock()
+		assert.Equal(t, float64(200), g.rateEngine.cfg.TPS, "a NaN sim.rate command changed the rate instead of being ignored")
+	})
+}
+
 func TestGear_RunDurationEndsGeneration(t *testing.T) {
 	cfg := controlTestConfig()
 	cfg.Rate.Duration = "300ms"
@@ -216,6 +278,31 @@ func TestGear_StopAndStartCycles(t *testing.T) {
 	requireNoLoops(t, g, "a generation loop outlived sim.stop")
 }
 
+// TestGear_WaitForGenerationLoopToExitBlocksUntilTheLoopReturns is a regression
+// test for a real bug: sim.start and sim.reset closed the running generation
+// loop's stopCh and immediately spawned a new one, with nothing waiting for the
+// old loop's goroutine to actually return (ticker.Stop, liveLoops.Add(-1)) first.
+// Both loops could then emit for the window in between. waitForGenerationLoopToExit
+// exists to close that window; this asserts its actual guarantee, that liveLoops
+// has already reached zero by the time it returns, not just that a stop was
+// requested.
+func TestGear_WaitForGenerationLoopToExitBlocksUntilTheLoopReturns(t *testing.T) {
+	g, _ := newControlGear(t, controlTestConfig())
+
+	g.startGeneration(context.Background())
+	require.Eventually(t, func() bool { return g.liveLoops.Load() == 1 }, eventually, 10*time.Millisecond,
+		"the generation loop never started")
+
+	g.mu.Lock()
+	g.closeStopLocked()
+	g.mu.Unlock()
+
+	g.waitForGenerationLoopToExit()
+
+	assert.Equal(t, int64(0), g.liveLoops.Load(),
+		"waitForGenerationLoopToExit returned before the previous loop actually exited")
+}
+
 // TestGear_StopAndStartCycles above calls handleControlCommand directly,
 // which proves the generation loop's own lifecycle but never exercises
 // controlLoop itself: the goroutine Start spawns once, for the gear's whole
@@ -237,7 +324,7 @@ func TestGear_ControlLoopKeepsDispatchingAfterASimStop(t *testing.T) {
 	g.ctrlCh = ch
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go g.controlLoop(ctx)
+	go g.controlLoop(ctx, ch)
 
 	send := func(cmd ctrl.Command) {
 		t.Helper()
@@ -260,6 +347,71 @@ func TestGear_ControlLoopKeepsDispatchingAfterASimStop(t *testing.T) {
 	send(ctrl.Command{Cmd: ctrl.CmdSimStart})
 	require.Eventually(t, func() bool { return emitted.Load() > afterStop }, eventually, 10*time.Millisecond,
 		"no messages emitted after sim.start following a sim.stop: controlLoop likely exited")
+}
+
+// mockControlPlane counts subscriptions so tests can catch Start subscribing
+// more than once for the same running gear.
+type mockControlPlane struct {
+	mu   sync.Mutex
+	ch   chan ctrl.Command
+	subs int
+}
+
+func newMockControlPlane() *mockControlPlane {
+	return &mockControlPlane{ch: make(chan ctrl.Command)}
+}
+
+func (m *mockControlPlane) Publish(string, ctrl.Command) error { return nil }
+
+func (m *mockControlPlane) Subscribe(string) (<-chan ctrl.Command, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.subs++
+	return m.ch, nil
+}
+
+func (m *mockControlPlane) subscribeCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.subs
+}
+
+// TestGear_StartTwiceSubscribesOnlyOnce is a regression test for a real bug:
+// Start used to subscribe to the control plane and spawn a controlLoop
+// goroutine unconditionally, with no record of a subscription already in
+// progress. A second Start call (the runtime never guaranteed only one)
+// subscribed again and raced a second controlLoop against the first on the
+// shared g.ctrlCh/g.ctrlCancel fields, and ctrlCancel was never actually
+// wired to anything, so Stop/Drain could not cancel either loop: the old
+// one leaked and a later Start refused to resubscribe, believing the gear
+// still under control forever.
+func TestGear_StartTwiceSubscribesOnlyOnce(t *testing.T) {
+	cfg := controlTestConfig()
+	cfg.Trigger = "on_control"
+	g, emitted := newControlGear(t, cfg)
+	cp := newMockControlPlane()
+	g.cp = cp
+
+	require.NoError(t, g.Start(context.Background(), g.emit))
+	require.NoError(t, g.Start(context.Background(), g.emit))
+	assert.Equal(t, 1, cp.subscribeCount(),
+		"a second Start subscribed to the control plane again instead of reusing the running controlLoop")
+
+	cp.ch <- ctrl.Command{Cmd: ctrl.CmdSimStart}
+	require.Eventually(t, func() bool { return emitted.Load() > 0 }, eventually, 10*time.Millisecond,
+		"no messages emitted after sim.start")
+
+	// Stop must actually cancel the controlLoop and clear ctrlCh/ctrlCancel,
+	// or the next Start refuses to resubscribe.
+	require.NoError(t, g.Stop())
+	require.NoError(t, g.Start(context.Background(), g.emit))
+	assert.Equal(t, 2, cp.subscribeCount(),
+		"Stop did not clear ctrlCh/ctrlCancel: the next Start refused to resubscribe")
+
+	afterRestart := emitted.Load()
+	cp.ch <- ctrl.Command{Cmd: ctrl.CmdSimStart}
+	require.Eventually(t, func() bool { return emitted.Load() > afterRestart }, eventually, 10*time.Millisecond,
+		"no messages emitted after Stop then Start then sim.start: the resubscribed controlLoop is not dispatching")
 }
 
 func TestGear_RateCommand(t *testing.T) {

@@ -232,3 +232,29 @@ func TestResponder_NowUsesTheLayoutOfTheField(t *testing.T) {
 	assert.Equal(t, "233005", r.expandMacro("$NOW", 12, req, nil))
 	assert.Equal(t, "0921233005", r.expandMacro("$NOW", 7, req, nil))
 }
+
+// TestResponder_DeterministicClockIsFixedAndSeedDerived is a regression test for the
+// responder half of the same finding as sim_source's: $NOW fell back to time.Now() in
+// every production path, so replies were otherwise reproducible under a seed except
+// for their timestamps. DeterministicClock fixes $NOW to a seed-derived instant that
+// must not advance during a run, and must match across responders built with the
+// same seed.
+func TestResponder_DeterministicClockIsFixedAndSeedDerived(t *testing.T) {
+	newDetResponder := func(seed int64) *Responder {
+		r := newTestResponder(t, Config{Timezone: "UTC", Seed: seed, DeterministicClock: true})
+		return r
+	}
+	req := &fluxmsg.FluxMsg{}
+	const datetime = 7 // DE 7 of the reference spec
+
+	r := newDetResponder(42)
+	first := r.expandMacro("$NOW", datetime, req, nil)
+	second := r.expandMacro("$NOW", datetime, req, nil)
+	assert.Equal(t, first, second, "a deterministic clock advanced within a single run")
+
+	again := newDetResponder(42).expandMacro("$NOW", datetime, req, nil)
+	assert.Equal(t, first, again, "the same seed produced a different deterministic instant across responders")
+
+	other := newDetResponder(43).expandMacro("$NOW", datetime, req, nil)
+	assert.NotEqual(t, first, other, "two different seeds produced the same deterministic instant")
+}

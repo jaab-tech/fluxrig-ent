@@ -2,6 +2,47 @@
 
 # Changelog
 
+## [v0.1.1] - 2026-09-28
+
+### Added
+
+- `sim_source`/`sim_responder`: `deterministic_clock` (default `false`,
+  unchanged behavior). When set, `$NOW` derives from the seed instead of
+  the wall clock, so seeded output stays reproducible run to run.
+- `sim_responder`: `seed` (default `0`, unchanged behavior), seeding its
+  RNG the same way `sim_source.seed` already does; `sim.reset` now
+  reseeds it too.
+
+### Fixed
+
+- `sim_source`/`sim_responder`: field selection, macro expansion and
+  override lookups that iterate a Go map (`selectMTI`, the Set-override
+  loop, the Default/Rules loops, `macroENUM`) now sort keys first, so
+  output under an identical seed no longer varies run to run.
+- `sim_source`: a data race between `Start` writing `g.emit` and the
+  generation goroutine reading it unlocked; the value is now snapshotted
+  before the goroutine starts.
+- `sim_source`: `calculateInterval` only rejected `tps <= 0`; a `NaN` or
+  extreme TPS from `sim.rate` (parsed with `strconv.ParseFloat`, which
+  accepts `"nan"`/`"inf"` without error) reached `time.NewTicker`/`.Reset`
+  and panicked. Guarded at every parse site and clamped in
+  `calculateInterval` itself.
+- `sim_source`: the control loop never stopped on its own cancellation
+  signal (`ctrlCancel` was declared but never assigned), and a second
+  `Start` could race a second control loop against the first. Wired to a
+  real `context.CancelFunc`, with re-entrant `Start` guarded.
+- `sim_source`: `sim.start`/`sim.reset` began a new generation loop
+  without waiting for the previous one to actually exit, so both could
+  emit briefly at once. The old loop is now waited on before the new one
+  starts.
+- `sim_source`: `resolveFieldMap`/`expandMacro` silently accepted a
+  mistyped field key or unknown macro. Now validated the same way
+  `sim_responder` already validates its own config.
+- `license.File.Verify` panicked on a nil receiver (latent; no call site
+  passes one today, guarded anyway).
+
+Pairs with fluxrig v0.12.0.
+
 ## [v0.1.0] - 2026-09-24
 
 ### Added

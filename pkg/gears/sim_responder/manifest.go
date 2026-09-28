@@ -56,6 +56,16 @@ const configSchema = `{
       "default": "local",
       "description": "The clock that $NOW and $RRN render: local, GMT (or UTC), or a zone name such as America/Montevideo."
     },
+    "seed": {
+      "type": "integer",
+      "default": 0,
+      "description": "Makes $AUTH/$RAND/$ENUM/$NOW reproducible across runs and across a sim.reset. Default 0 keeps replies non-reproducible, seeded from the wall clock."
+    },
+    "deterministic_clock": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, $NOW and $RRN use a fixed instant derived from seed instead of the wall clock. Default false keeps timestamps tracking real time."
+    },
     "default": {
       "type": "object",
       "additionalProperties": { "type": "string" },

@@ -13,11 +13,31 @@ package sim_source
 
 import (
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"strconv"
 	"sync"
 	"time"
 )
+
+// maxTPS bounds a configured or requested rate, TPS or ramp From/To alike.
+// Above it, or at a NaN/Inf value, calculateInterval's float division either
+// underflows to an interval time.Duration rounds to zero or produces a value
+// outside what a Duration can represent, and time.NewTicker/.Reset panics on
+// either. strconv.ParseFloat parses "nan" and "inf" without error, so this
+// needs checking explicitly wherever a rate value is parsed, not inferred
+// from the parse's own error.
+const maxTPS = 1_000_000
+
+// validRate reports whether v is usable as a TPS or ramp From/To value.
+func validRate(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= maxTPS
+}
+
+// minTickerInterval is the floor calculateInterval clamps to. Even a TPS
+// within [0, maxTPS] can still divide down to an interval below what ticks
+// meaningfully; this keeps the ticker itself always constructible.
+const minTickerInterval = time.Microsecond
 
 // RateEngine handles rate shaping for the generator.
 type RateEngine struct {
@@ -81,10 +101,14 @@ func (re *RateEngine) Ticker() *time.Ticker {
 }
 
 func (re *RateEngine) calculateInterval() time.Duration {
-	if re.currentTPS <= 0 {
-		return time.Hour // Effectively stopped
+	if !validRate(re.currentTPS) || re.currentTPS == 0 {
+		return time.Hour // Effectively stopped, or a bad rate that slipped past validation somewhere
 	}
-	return time.Duration(float64(time.Second) / re.currentTPS)
+	interval := time.Duration(float64(time.Second) / re.currentTPS)
+	if interval < minTickerInterval {
+		return minTickerInterval
+	}
+	return interval
 }
 
 // startRampLocked begins a ramp from now and ends the one in progress, so that at most
@@ -146,13 +170,17 @@ func (re *RateEngine) UpdateRate(tps float64, shape, from, to, over string) {
 	}
 	re.cfg.TPS = tps
 	if from != "" {
-		if f, err := strconv.ParseFloat(from, 64); err == nil {
+		if f, err := strconv.ParseFloat(from, 64); err == nil && validRate(f) {
 			re.cfg.From = f
+		} else {
+			re.logger.Warn("Ignoring sim.rate: from is not a usable rate", "from", from)
 		}
 	}
 	if to != "" {
-		if t, err := strconv.ParseFloat(to, 64); err == nil {
+		if t, err := strconv.ParseFloat(to, 64); err == nil && validRate(t) {
 			re.cfg.To = t
+		} else {
+			re.logger.Warn("Ignoring sim.rate: to is not a usable rate", "to", to)
 		}
 	}
 	if over != "" {

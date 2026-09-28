@@ -36,6 +36,18 @@ type Config struct {
 	// "America/Montevideo".
 	Timezone string `json:"timezone" yaml:"timezone"`
 
+	// Seed makes $AUTH/$RAND/$ENUM reproducible across runs and across a
+	// sim.reset, the same way sim_source.Config.Seed does. Zero (the
+	// default) keeps the responder's prior behavior: seeded from the wall
+	// clock, so replies vary run to run. Set it when a test or a demo needs
+	// the exact same replies for the exact same requests.
+	Seed int64 `json:"seed" yaml:"seed"`
+
+	// DeterministicClock makes $NOW and $RRN use a fixed instant derived
+	// from Seed instead of the wall clock. False (the default) keeps the
+	// prior behavior: output timestamps track when the gear actually ran.
+	DeterministicClock bool `json:"deterministic_clock" yaml:"deterministic_clock"`
+
 	// Default response field values.
 	// Keys can be field numbers ("39") or aliases ("resp_code").
 	Default map[string]string `json:"default" yaml:"default"`

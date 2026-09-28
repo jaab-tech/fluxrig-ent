@@ -83,6 +83,19 @@ func (g *Gear) Init(ctx sdk.GearContext) error {
 	if tz, ok := config["timezone"].(string); ok {
 		g.cfg.Timezone = tz
 	}
+	// Seed accepts any YAML/JSON number shape (int from YAML maps, float64
+	// from JSON), the same as sim_source.Config.Seed: a bare .(float64)
+	// assertion would silently drop an integer seed from a YAML scenario.
+	if seed, ok := config["seed"].(float64); ok {
+		g.cfg.Seed = int64(seed)
+	} else if seed, ok := config["seed"].(int64); ok {
+		g.cfg.Seed = seed
+	} else if seed, ok := config["seed"].(int); ok {
+		g.cfg.Seed = int64(seed)
+	}
+	if det, ok := config["deterministic_clock"].(bool); ok {
+		g.cfg.DeterministicClock = det
+	}
 
 	// YAML maps with numeric keys (e.g. ISO field numbers like
 	// `39: "00"`) decode as map[any]any, not map[string]any: a bare

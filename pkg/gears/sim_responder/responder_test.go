@@ -5,8 +5,10 @@ package sim_responder
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -240,6 +242,105 @@ func TestResponder_NoMatchingRule_UsesDefault(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "00", getRespField(resp, "iso8583.field.39"))
+}
+
+// authFields are ten distinct field numbers all set to $AUTH, a macro that draws
+// from the responder's RNG. Ten keys make an accidental iteration-order match
+// across independently built map literals astronomically unlikely, so this
+// only passes if the values are actually seed-derived and order-independent.
+func authFieldsConfig() map[string]string {
+	fields := make(map[string]string, 10)
+	for i := 10; i < 20; i++ {
+		fields[strconv.Itoa(i)] = "$AUTH"
+	}
+	return fields
+}
+
+func authFieldValues(t *testing.T, resp *fluxmsg.FluxMsg) []string {
+	t.Helper()
+	values := make([]string, 10)
+	for i := 10; i < 20; i++ {
+		v, _ := getRespField(resp, fmt.Sprintf("iso8583.field.%d", i)).(string)
+		values[i-10] = v
+	}
+	return values
+}
+
+// TestResponder_SeedMakesDefaultsReproducible is a regression test for two real
+// bugs found together: NewResponder had no way to seed its RNG at all (always
+// time.Now().UnixNano()), and even with a seed, ProcessRequest's defaults loop
+// ranged r.cfg.Default directly, so ten independently built Default maps with
+// identical content could still expand their $AUTH macros in ten different
+// orders and consume the RNG stream differently. Both had to be fixed for the
+// same seed to mean the same replies.
+func TestResponder_SeedMakesDefaultsReproducible(t *testing.T) {
+	spec := createTestSpec(t)
+	meta := createTestFieldMeta(t)
+	req := &fluxmsg.FluxMsg{
+		FluxID:   func() uuid.UUID { id, _ := uuid.NewV7(); return id }(),
+		Metadata: map[string]string{"iso8583.mti": "0100"},
+		Data: map[string]any{
+			"iso8583.field.2":  "4111111111111111",
+			"iso8583.field.11": "000001",
+			"iso8583.field.4":  "10000",
+			"iso8583.field.41": "TERM0001",
+		},
+	}
+
+	var first []string
+	for i := 0; i < 10; i++ {
+		cfg := Config{Seed: 42, Default: authFieldsConfig()}
+		responder := NewResponder(spec, meta, cfg, &mockIDGenerator{})
+		responder.SetLogger(slog.New(slog.NewTextHandler(&testingLogWriter{t}, nil)))
+
+		resp, err := responder.ProcessRequest(context.Background(), req)
+		require.NoError(t, err)
+		values := authFieldValues(t, resp)
+
+		if first == nil {
+			first = values
+			continue
+		}
+		assert.Equal(t, first, values, "run %d produced different $AUTH values under the same seed", i)
+	}
+}
+
+// TestResponder_ResetCountersReseedsTheRNG is a regression test for the other half
+// of the same finding: ResetCounters cleared only seqCounters, never the RNG, so a
+// sim.reset did not actually replay $AUTH/$RAND/$ENUM output from the start.
+func TestResponder_ResetCountersReseedsTheRNG(t *testing.T) {
+	spec := createTestSpec(t)
+	meta := createTestFieldMeta(t)
+	req := &fluxmsg.FluxMsg{
+		FluxID:   func() uuid.UUID { id, _ := uuid.NewV7(); return id }(),
+		Metadata: map[string]string{"iso8583.mti": "0100"},
+		Data: map[string]any{
+			"iso8583.field.2":  "4111111111111111",
+			"iso8583.field.11": "000001",
+			"iso8583.field.4":  "10000",
+			"iso8583.field.41": "TERM0001",
+		},
+	}
+
+	cfg := Config{Seed: 7, Default: authFieldsConfig()}
+	responder := NewResponder(spec, meta, cfg, &mockIDGenerator{})
+	responder.SetLogger(slog.New(slog.NewTextHandler(&testingLogWriter{t}, nil)))
+
+	resp1, err := responder.ProcessRequest(context.Background(), req)
+	require.NoError(t, err)
+	before := authFieldValues(t, resp1)
+
+	// Consume more of the stream so a reset that does nothing keeps diverging.
+	_, err = responder.ProcessRequest(context.Background(), req)
+	require.NoError(t, err)
+
+	responder.ResetCounters()
+
+	resp2, err := responder.ProcessRequest(context.Background(), req)
+	require.NoError(t, err)
+	after := authFieldValues(t, resp2)
+
+	assert.Equal(t, before, after, "ResetCounters did not reseed the RNG: the replies after a reset did not replay the first run")
 }
 
 func TestConfig_ParseDelay(t *testing.T) {

@@ -42,6 +42,14 @@ type Config struct {
 	// "America/Montevideo".
 	Timezone string `json:"timezone" yaml:"timezone"`
 
+	// DeterministicClock makes $NOW, $RRN, and the expiry-date arithmetic
+	// (ExpiryMonths/ExpiredPercent) use a fixed instant derived from Seed
+	// instead of the wall clock. False (the default) keeps the prior
+	// behavior: output timestamps track when the gear actually ran, the
+	// same as every run before this option existed. Set it when a test or a
+	// demo needs byte-identical output, timestamps included, across runs.
+	DeterministicClock bool `json:"deterministic_clock" yaml:"deterministic_clock"`
+
 	// Rate configures the emission rate shaping.
 	Rate RateConfig `json:"rate" yaml:"rate"`
 
