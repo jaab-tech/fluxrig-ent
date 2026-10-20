@@ -14,7 +14,7 @@ gears:
     type: sim_source
     deploy: rack-sim-source
     config:
-      spec: iso8583-v87-ascii:v2.2.0
+      spec: iso8583-v87-ascii:v3.0.0
       seed: 20260904
       trigger: on_load
       rate:
@@ -31,7 +31,7 @@ gears:
     type: codec_iso8583
     deploy: rack-sim-source
     config:
-      spec_path: iso8583-v87-ascii:v2.2.0
+      spec_path: iso8583-v87-ascii:v3.0.0
       direction: encode
       validation: off
 

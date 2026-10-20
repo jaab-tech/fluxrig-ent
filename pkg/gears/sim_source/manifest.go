@@ -38,7 +38,7 @@ const configSchema = `{
   "properties": {
     "spec": {
       "type": "string",
-      "description": "Spec reference (store URN or file path). Example: iso8583-v87-ascii:v2.2.0"
+      "description": "Spec reference (store URN or file path). Example: iso8583-v87-ascii:v3.0.0"
     },
     "seed": {
       "type": "integer",

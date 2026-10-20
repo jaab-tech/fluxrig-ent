@@ -17,6 +17,18 @@ ${RESPONDER_PORT}=    10002
 ${REPORT_DIR}    ${CURDIR}/../results
 
 *** Keywords ***
+Seed Mixer Store With Reference Spec
+    [Documentation]    Store the engine's v87 spec in the Mixer CAS as iso8583-v87-ascii:v3.0.0.
+    ...    The blob is named by the SHA-256 of the file, computed here, so an
+    ...    edit to the engine's spec does not leave the suite naming a stale blob.
+    [Arguments]    ${mixer_dir}
+    ${spec}=    Set Variable    %{FLUXRIG_DIR}/examples/specs/iso8583-v87-ascii.yaml
+    ${sha}=    Evaluate    hashlib.sha256(pathlib.Path(r'''${spec}''').read_bytes()).hexdigest()    modules=hashlib,pathlib
+    ${dir}=    Set Variable    ${mixer_dir}/data/store/blobs/${sha}[:2]
+    Create Directory    ${dir}
+    Copy File    ${spec}    ${dir}/${sha}
+    Create File    ${mixer_dir}/data/store/index.json    {"Specs": {"iso8583-v87-ascii": {"v3.0.0": "${sha}"}}, "Scenarios": {}}
+
 # Simulator-specific message handling
 
 Send Message To Simulator
@@ -53,11 +65,7 @@ Build Financial Request
 
 Build Network Mgmt Request
     [Arguments]    ${code}=301    ${bitmap}=binary
-    # No fields: the assertion is MTI pairing (0800->0810), and field
-    # 70 would need a secondary bitmap, which this stack cannot emit
-    # (moov Length-16 bitmaps always occupy 32 wire chars; a real
-    # secondary would need 64). Recorded as interop debt with the
-    # bitmap quirk above.
+    # No fields: the assertion is MTI pairing (0800->0810).
     ${msg_hex}=    Build Iso Message    0800    bitmap=${bitmap}
     RETURN    ${msg_hex}
 
@@ -276,13 +284,12 @@ Initialize Simulator Suite
     Set Suite Variable    ${SCENARIO_FILE}   ${suite_path}/${scenario_filename}
 
     Copy File    ${suite_path}/specs/rules.yaml    ${WORK_DIR}/rack/specs/rules.yaml
-    Create Directory    ${WORK_DIR}/mixer/data/store/blobs/5f
-    Copy File    %{FLUXRIG_DIR}/examples/specs/iso8583-v87-ascii.yaml    ${WORK_DIR}/mixer/data/store/blobs/5f/5f789c2114a45bd81f265339ddb6d96949fcdf26d752745ac2ddf83a4f0a0ac9
-    Create File    ${WORK_DIR}/mixer/data/store/index.json    {"Specs": {"iso8583-v87-ascii": {"v2.2.0": "5f789c2114a45bd81f265339ddb6d96949fcdf26d752745ac2ddf83a4f0a0ac9"}}, "Scenarios": {}}
+    Seed Mixer Store With Reference Spec    ${WORK_DIR}/mixer
 
     Generate Cluster Key    work_dir=${WORK_DIR}/mixer
     Start Mixer    config_file=${MIXER_CONFIG}    work_dir=${WORK_DIR}/mixer    alias=mixer
-    Sleep    15s
+    # Not a fixed sleep: the Mixer reports healthy when it is.
+    Wait For Healthy    port=${MIXER_PORT}    timeout=60
     Start Rack     config_file=${RACK_CONFIG}     work_dir=${WORK_DIR}/rack    mixer_home=${WORK_DIR}/mixer    alias=rack
     Wait For Rack Registration    mixer_port=${MIXER_PORT}    rack_name=sim-node-01    timeout=60
     Wait For Rack Active By Name    mixer_port=${MIXER_PORT}    rack_name=sim-node-01    timeout=60
@@ -301,6 +308,10 @@ Teardown Simulator Suite
 Initialize Integration Suite
     [Arguments]    ${suite_path}
     Initialize Simulator Suite    ${suite_path}    scenario_integration.yaml
+    # The tests connect to the sink as soon as they start. A fixed sleep
+    # was enough on an idle machine and refused the connection on a busy
+    # one, so wait until the Rack has opened the port.
+    Wait For Port    port=18584    timeout=60
 
 Teardown Integration Suite
     Teardown Simulator Suite

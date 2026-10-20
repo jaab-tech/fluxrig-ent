@@ -23,7 +23,7 @@ ${MIXER_CONFIG}   ${CURDIR}/configs/mixer/fluxrig-mixer.toml
 ${RACK_CONFIG}    ${CURDIR}/configs/rack/iso_rack.toml
 ${SCENARIO_FILE}  ${CURDIR}/scenario_integration.yaml
 ${SILENCE}        4
-${SPEC_REF}       iso8583-v87-ascii:v2.2.0
+${SPEC_REF}       iso8583-v87-ascii:v3.0.0
 
 *** Test Cases ***
 Integration Full Flow End To End
