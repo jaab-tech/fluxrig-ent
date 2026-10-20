@@ -2,6 +2,23 @@
 
 # Changelog
 
+## [v0.1.2] - 2026-10-20
+
+### Changed
+
+- The examples, the e2e scenarios and the Robot suites reference the engine's
+  ISO 8583 reference spec as `iso8583-v87-ascii:v3.0.0`. fluxrig v0.13.0 gives
+  that spec a standard bitmap and the new version: a scenario that names
+  `iso8583-v87-ascii:v2.2.0` keeps the old layout, so change the reference
+  and upload the new spec to the Mixer.
+- Built and tested against fluxrig v0.13.0, and the release pins the engine
+  to that version. The unit tests, the e2e suite (4 of 4) and the Robot
+  suite (25 of 25) pass on it. Read the fluxrig v0.13.0 notes before you
+  upgrade: the registry moved to the bus, and the Mixer refuses to start
+  without `api.auth_token`.
+- The test configurations follow the engine's fail-fast validation, which
+  refuses a stray or misspelled key and a duration that does not parse.
+
 ## [v0.1.1] - 2026-09-28
 
 ### Added

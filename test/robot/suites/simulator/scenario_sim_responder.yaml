@@ -6,6 +6,12 @@ meta:
   version: "2.0.0"
   description: "Tests for sim_responder gear - ISO8583 authorizer simulator as a pure logic gear behind io+codec"
 
+# Activation pushes a scenario only to the Racks it names: a scenario of
+# global gears alone reaches a Rack only if that Rack enrolls after the
+# activation, which made this suite depend on timing.
+racks:
+  - name: sim-node-01
+
 gears:
   # io_iso8583 owns the TCP socket (server mode). Transport — listen,
   # framing, mTLS, per-connection reply routing — is its job, not the
@@ -21,7 +27,7 @@ gears:
   - name: decoder
     type: codec_iso8583
     config:
-      spec_path: iso8583-v87-ascii:v2.2.0
+      spec_path: iso8583-v87-ascii:v3.0.0
       direction: decode
       validation: off
 
@@ -30,7 +36,7 @@ gears:
   - name: issuer
     type: sim_responder
     config:
-      spec: iso8583-v87-ascii:v2.2.0
+      spec: iso8583-v87-ascii:v3.0.0
       trigger: on_load
       delay: 50ms
       default:
@@ -57,7 +63,7 @@ gears:
   - name: encoder
     type: codec_iso8583
     config:
-      spec_path: iso8583-v87-ascii:v2.2.0
+      spec_path: iso8583-v87-ascii:v3.0.0
       direction: encode
       validation: off
 

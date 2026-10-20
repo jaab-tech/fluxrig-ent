@@ -14,7 +14,6 @@ database_file = "flux.duckdb"
 cluster_key_file = "cluster.key"
 
 [mixer]
-machine_id = 1
 mixer_name = "ent-e2e-mixer"
 
 [api]

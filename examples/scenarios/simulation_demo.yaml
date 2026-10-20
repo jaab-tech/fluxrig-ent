@@ -46,7 +46,7 @@ gears:
     type: "sim_source"
     deploy: "rack-scheme"
     config:
-      spec: "iso8583-v87-ascii:v2.2.0"
+      spec: "iso8583-v87-ascii:v3.0.0"
       seed: 20260904
       trigger: "on_control"          # start via Control Plane
       rate:
@@ -67,7 +67,7 @@ gears:
     type: "codec_iso8583"
     deploy: "rack-scheme"
     config:
-      spec_path: "iso8583-v87-ascii:v2.2.0"
+      spec_path: "iso8583-v87-ascii:v3.0.0"
       direction: "encode"
       on_error: "reject"
 
@@ -98,7 +98,7 @@ gears:
     type: "codec_iso8583"
     deploy: "rack-issuer"
     config:
-      spec_path: "iso8583-v87-ascii:v2.2.0"
+      spec_path: "iso8583-v87-ascii:v3.0.0"
       direction: "decode"
       on_error: "reject"
 
@@ -139,7 +139,7 @@ gears:
     type: "codec_iso8583"
     deploy: "rack-issuer"
     config:
-      spec_path: "iso8583-v87-ascii:v2.2.0"
+      spec_path: "iso8583-v87-ascii:v3.0.0"
       direction: "encode"
       on_error: "reject"
 
@@ -158,7 +158,7 @@ gears:
     type: "codec_iso8583"
     deploy: "rack-issuer"
     config:
-      spec_path: "iso8583-v87-ascii:v2.2.0"
+      spec_path: "iso8583-v87-ascii:v3.0.0"
       direction: "decode"
       on_error: "reject"
 
@@ -189,7 +189,7 @@ gears:
     type: "codec_iso8583"
     deploy: "rack-authorizer"
     config:
-      spec_path: "iso8583-v87-ascii:v2.2.0"
+      spec_path: "iso8583-v87-ascii:v3.0.0"
       direction: "decode"
       on_error: "reject"
 
@@ -197,7 +197,7 @@ gears:
     type: "sim_responder"
     deploy: "rack-authorizer"
     config:
-      spec: "iso8583-v87-ascii:v2.2.0"
+      spec: "iso8583-v87-ascii:v3.0.0"
       trigger: "on_load"
       delay: "50ms"
       default:
@@ -223,7 +223,7 @@ gears:
     type: "codec_iso8583"
     deploy: "rack-authorizer"
     config:
-      spec_path: "iso8583-v87-ascii:v2.2.0"
+      spec_path: "iso8583-v87-ascii:v3.0.0"
       direction: "encode"
       on_error: "reject"
 

@@ -3,12 +3,18 @@ meta:
   version: "1.0.0"
   description: "Full integration test: sim_source -> enrichment -> sim_responder"
 
+# Activation pushes a scenario only to the Racks it names: a scenario of
+# global gears alone reaches a Rack only if that Rack enrolls after the
+# activation, which made this suite depend on timing.
+racks:
+  - name: sim-node-01
+
 gears:
   # 1. Scheme side: sim_source generates traffic
   - name: scheme
     type: sim_source
     config:
-      spec: iso8583-v87-ascii:v2.2.0
+      spec: iso8583-v87-ascii:v3.0.0
       seed: 20260904
       trigger: on_control
       rate:
@@ -73,7 +79,7 @@ gears:
   - name: codec_issuer
     type: codec_iso8583
     config:
-      spec_path: iso8583-v87-ascii:v2.2.0
+      spec_path: iso8583-v87-ascii:v3.0.0
       direction: encode
       validation: off
 
@@ -82,7 +88,7 @@ gears:
   - name: issuer
     type: sim_responder
     config:
-      spec: iso8583-v87-ascii:v2.2.0
+      spec: iso8583-v87-ascii:v3.0.0
       trigger: on_load
       delay: 50ms
       default:
@@ -120,7 +126,7 @@ gears:
   - name: codec_response
     type: codec_iso8583
     config:
-      spec_path: iso8583-v87-ascii:v2.2.0
+      spec_path: iso8583-v87-ascii:v3.0.0
       direction: encode
       validation: off
 

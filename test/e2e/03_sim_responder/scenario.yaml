@@ -23,7 +23,7 @@ gears:
     type: codec_iso8583
     deploy: rack-sim-responder
     config:
-      spec_path: iso8583-v87-ascii:v2.2.0
+      spec_path: iso8583-v87-ascii:v3.0.0
       direction: decode
       validation: off
 
@@ -31,7 +31,7 @@ gears:
     type: sim_responder
     deploy: rack-sim-responder
     config:
-      spec: iso8583-v87-ascii:v2.2.0
+      spec: iso8583-v87-ascii:v3.0.0
       trigger: on_load
       delay: 10ms
       default:
@@ -43,7 +43,7 @@ gears:
     type: codec_iso8583
     deploy: rack-sim-responder
     config:
-      spec_path: iso8583-v87-ascii:v2.2.0
+      spec_path: iso8583-v87-ascii:v3.0.0
       direction: encode
       validation: off
 

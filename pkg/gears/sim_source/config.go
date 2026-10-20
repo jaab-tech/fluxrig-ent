@@ -14,7 +14,7 @@ package sim_source
 // Config holds the configuration for the sim_source gear.
 type Config struct {
 	// Spec is the spec reference (store URN or file path).
-	// Example: "iso8583-v87-ascii:v2.2.0"
+	// Example: "iso8583-v87-ascii:v3.0.0"
 	Spec string `json:"spec" yaml:"spec"`
 
 	// Seed is the random seed for deterministic generation.

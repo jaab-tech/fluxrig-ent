@@ -4,22 +4,14 @@
 
 [logging]
   level = "debug"
-  format = "json"
   filename = "logs/mixer.log"
 
 [snake]
   port = 4222
-  cluster_key = "data/cluster.key"
-
-[telemetry]
-  enabled = true
-  port = 18090
 
 [store]
-  path = "data/telemetry.duckdb"
+  dir = "./data"
+  cluster_key_file = "cluster.key"
 
 [enrollment]
   auto_adopt = true
-
-[scenario]
-  dir = "scenarios"

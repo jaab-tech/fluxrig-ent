@@ -46,7 +46,7 @@ if __name__ == '__main__':
             'type': 'codec_iso8583',
             'deploy': 'sim-node-01',
             'config': {
-                'spec_path': 'iso8583-v87-ascii:v2.2.0',
+                'spec_path': 'iso8583-v87-ascii:v3.0.0',
                 'direction': 'encode',
                 'validation': 'off',
             },
@@ -83,7 +83,7 @@ if __name__ == '__main__':
                 'type': 'sim_source',
                 'deploy': 'sim-node-01',
                 'config': {
-                    'spec': 'iso8583-v87-ascii:v2.2.0',
+                    'spec': 'iso8583-v87-ascii:v3.0.0',
                     'seed': 20260904,
                     'trigger': 'on_load',
                     'rate': {
@@ -119,7 +119,7 @@ if __name__ == '__main__':
                 'type': 'sim_source',
                 'deploy': 'sim-node-01',
                 'config': {
-                    'spec': 'iso8583-v87-ascii:v2.2.0',
+                    'spec': 'iso8583-v87-ascii:v3.0.0',
                     'seed': 20260904,
                     'trigger': 'on_load',
                     'rate': {

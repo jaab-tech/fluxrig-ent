@@ -32,7 +32,7 @@ RACK_PID=""
 API_PORT=""
 
 # The spec is stored under the sha256 of its content, which is how the Mixer
-# resolves a reference such as iso8583-v87-ascii:v2.2.0.
+# resolves a reference such as iso8583-v87-ascii:v3.0.0.
 seed_spec_store() {
     local spec="${FLUXRIG_DIR}/examples/specs/iso8583-v87-ascii.yaml"
     local sum
@@ -43,7 +43,7 @@ seed_spec_store() {
     fi
     mkdir -p "${WORK_DIR}/mixer/data/store/blobs/${sum:0:2}"
     cp "$spec" "${WORK_DIR}/mixer/data/store/blobs/${sum:0:2}/${sum}"
-    printf '{"Specs": {"iso8583-v87-ascii": {"v2.2.0": "%s"}}, "Scenarios": {}}' "$sum" \
+    printf '{"Specs": {"iso8583-v87-ascii": {"v3.0.0": "%s"}}, "Scenarios": {}}' "$sum" \
         > "${WORK_DIR}/mixer/data/store/index.json"
 }
 

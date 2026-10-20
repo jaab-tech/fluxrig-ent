@@ -423,7 +423,7 @@ func (g *Gear) loadSpec(ctx sdk.GearContext) error {
 }
 
 // readSpecContent loads the spec from the store. The spec is a store reference such as
-// iso8583-v87-ascii:v2.2.0: reading one from a file path is not supported, and the error
+// iso8583-v87-ascii:v3.0.0: reading one from a file path is not supported, and the error
 // says why the store did not give it, not only that a file cannot be read.
 func (g *Gear) readSpecContent(ctx sdk.GearContext) ([]byte, error) {
 	if g.mgr == nil {

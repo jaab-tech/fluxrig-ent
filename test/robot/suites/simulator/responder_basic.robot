@@ -175,10 +175,8 @@ Initialize Sim Responder Suite
     Copy File    ${suite_path}/specs/rules.yaml    ${WORK_DIR}/rack/specs/rules.yaml
     # Seed the mixer CAS with the v87 spec blob, same as the source
     # suite: without it the responder gear cannot resolve its
-    # iso8583-v87-ascii:v2.2.0 store reference and Init fails.
-    Create Directory    ${WORK_DIR}/mixer/data/store/blobs/5f
-    Copy File    %{FLUXRIG_DIR}/examples/specs/iso8583-v87-ascii.yaml    ${WORK_DIR}/mixer/data/store/blobs/5f/5f789c2114a45bd81f265339ddb6d96949fcdf26d752745ac2ddf83a4f0a0ac9
-    Create File    ${WORK_DIR}/mixer/data/store/index.json    {"Specs": {"iso8583-v87-ascii": {"v2.2.0": "5f789c2114a45bd81f265339ddb6d96949fcdf26d752745ac2ddf83a4f0a0ac9"}}, "Scenarios": {}}
+    # iso8583-v87-ascii:v3.0.0 store reference and Init fails.
+    Seed Mixer Store With Reference Spec    ${WORK_DIR}/mixer
 
     Generate Cluster Key    work_dir=${WORK_DIR}/mixer
     Start Mixer    config_file=${MIXER_CONFIG}    work_dir=${WORK_DIR}/mixer    alias=mixer
