@@ -2,6 +2,26 @@
 
 # Changelog
 
+## [v0.1.3] - 2026-10-25
+
+### Security
+
+- **Built with Go 1.26.10 and `golang.org/x/net` v0.60.0.** The build used Go
+  1.26.4 and `x/net` v0.59.0. `govulncheck` reports no reachable vulnerability
+  now. The engine release fluxrig v0.13.1 makes the same change, and it closed
+  23 reachable vulnerabilities there, 18 in the Go standard library and 5 in
+  `x/net`. A binary built from an earlier release, or one you build with an
+  older Go, still carries them.
+
+### Changed
+
+- Built and tested against fluxrig v0.13.1, and the release pins the engine
+  to that version. The unit tests, the e2e suite (4 of 4) and the Robot
+  suites (50 of 50) pass on it. fluxrig v0.13.1 pushes the active scenario to
+  a Rack that an operator approves, bounds the dead letter publish and the
+  approval push with timeouts, and moves the build to Go 1.26.10. Read its
+  notes before you upgrade.
+
 ## [v0.1.2] - 2026-10-20
 
 ### Changed
