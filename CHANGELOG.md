@@ -2,6 +2,16 @@
 
 # Changelog
 
+## [v0.1.4] - 2026-11-01
+
+### Changed
+
+- Built and tested against fluxrig v0.14.0, and the release pins the engine to
+  that version. The unit tests, the e2e suite (4 of 4) and the Robot suites
+  (25 of 25) pass on it. fluxrig v0.14.0 refuses a gear option that the gear
+  does not declare, adds durable connection events, and refuses a Wasm module
+  from the catalog with no valid signature. Read its notes before you upgrade.
+
 ## [v0.1.3] - 2026-10-25
 
 ### Security
@@ -17,7 +27,7 @@
 
 - Built and tested against fluxrig v0.13.1, and the release pins the engine
   to that version. The unit tests, the e2e suite (4 of 4) and the Robot
-  suites (50 of 50) pass on it. fluxrig v0.13.1 pushes the active scenario to
+  suites (25 of 25) pass on it. fluxrig v0.13.1 pushes the active scenario to
   a Rack that an operator approves, bounds the dead letter publish and the
   approval push with timeouts, and moves the build to Go 1.26.10. Read its
   notes before you upgrade.
