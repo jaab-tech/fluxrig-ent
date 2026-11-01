@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/jaab-tech/fluxrig v0.13.1
+	github.com/jaab-tech/fluxrig v0.14.0
 	github.com/stretchr/testify v1.12.1
 	gopkg.in/yaml.v3 v3.0.1
 )
