@@ -2,6 +2,16 @@
 
 # Changelog
 
+## [v0.1.5] - 2026-11-21
+
+### Changed
+
+- Built and tested against fluxrig v0.15.0, and the release pins the engine to
+  that version. The unit tests, the e2e suite (4 of 4) and the Robot suites
+  (25 of 25) pass on it. fluxrig v0.15.0 runs Mixer high availability on an
+  external NATS, and the Mixer and every Rack must run the same version. Read
+  its notes before you upgrade.
+
 ## [v0.1.4] - 2026-11-01
 
 ### Changed
