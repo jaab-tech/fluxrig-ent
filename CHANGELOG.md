@@ -2,6 +2,18 @@
 
 # Changelog
 
+## [v0.1.6] - 2026-11-21
+
+### Fixed
+
+- Built and tested against fluxrig v0.15.1, and the release pins the engine to
+  that version. In fluxrig v0.15.0 the Mixer dropped the push of the active
+  scenario that follows an enrollment: a Rack that restarted ran its saved
+  copy, and a Rack that was down during an activation did not get the
+  scenario when it came back. v0.15.1 fixes it and adds
+  `enrollment.push_timeout`. The unit tests, the e2e suite (4 of 4) and the
+  Robot suites (25 of 25) pass on it.
+
 ## [v0.1.5] - 2026-11-21
 
 ### Changed
