@@ -53,7 +53,7 @@ prepare_ent_workspace() {
     local name="$1" test_dir="$2" snake="$4" rack="$5"
     API_PORT="$3"
 
-    lsof -ti :"$API_PORT" -ti :"$snake" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    require_free_ports "$API_PORT" "$snake"
     setup_workspace "$name" "$test_dir"
     local c
     for c in mixer rack; do

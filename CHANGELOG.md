@@ -2,6 +2,23 @@
 
 # Changelog
 
+## [v0.1.7] - 2026-11-23
+
+### Changed
+
+- Built and tested against fluxrig v0.16.0, and the release pins the engine to
+  that version. The unit tests, the e2e suite (4 of 4) and the Robot suites
+  (25 of 25) pass on it. In fluxrig v0.16.0 a Coat Check daemon sends the
+  timeouts that it lost before, and that event does not mean that no reply
+  came. Upgrade all the Racks that use the same Coat Check bucket in one
+  maintenance window. Read its notes before you upgrade.
+
+### Fixed
+
+- Built with Go 1.26.11, which fixes GO-2026-6859 in `net/http`: with
+  `MaxBytesReader`, an HTTP/1 handler that reads the request body while it
+  writes the response header can crash the server.
+
 ## [v0.1.6] - 2026-11-21
 
 ### Fixed
